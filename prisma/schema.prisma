@@ -1,0 +1,477 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// -------------------------------------------------------------
+// ENUMS
+// -------------------------------------------------------------
+
+enum SystemRole {
+  ADMIN
+  ANALYST
+  VIEWER
+  AUDITOR
+}
+
+enum ProgramRole {
+  LEAD_ANALYST
+  ANALYST
+  VIEWER
+  AUDITOR
+}
+
+enum AssetType {
+  ROOT_DOMAIN
+  SUBDOMAIN
+  IP_ADDRESS
+  IP_RANGE
+  SERVICE
+  TECHNOLOGY
+  ENDPOINT
+  PARAMETER
+  CERTIFICATE
+  CLOUD_STORAGE
+}
+
+enum FindingSeverity {
+  INFO
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum FindingStatus {
+  DRAFT
+  CONFIRMED
+  REPORTED
+  REMEDIATED
+  FALSE_POSITIVE
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  BLOCKED
+  COMPLETED
+}
+
+enum OSINTType {
+  DNS_RECORD
+  WHOIS
+  CERT_TRANSPARENCY
+  ARCHIVE_SNAPSHOT
+  TECH_FINGERPRINT
+  LEAK_OR_BREACH_MENTION
+  CODE_REPOSITORY
+  DOCUMENT_METADATA
+}
+
+enum SecurityRelevance {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum IntelligenceSourceType {
+  NEWS
+  BLOG
+  FORUM
+  CODE
+  DOCUMENT
+  BREACH
+  OTHER
+}
+
+enum AuditAction {
+  USER_LOGIN
+  USER_LOGOUT
+  USER_REGISTER
+  USER_PASSWORD_CHANGE
+  USER_ROLE_CHANGE
+  PROGRAM_CREATE
+  PROGRAM_UPDATE
+  PROGRAM_DELETE
+  MEMBERSHIP_ADD
+  MEMBERSHIP_REMOVE
+  TARGET_CREATE
+  TARGET_UPDATE
+  TARGET_DELETE
+  ASSET_CREATE
+  ASSET_UPDATE
+  ASSET_DELETE
+  OSINT_INGEST
+  INTELLIGENCE_QUERY_RUN
+  INTELLIGENCE_BULK_RUN
+  INTELLIGENCE_SOURCE_UPDATE
+  FINDING_CREATE
+  FINDING_UPDATE
+  FINDING_DELETE
+  PHASE_UPDATE
+  TASK_CREATE
+  TASK_UPDATE
+  TASK_DELETE
+  EVIDENCE_UPLOAD
+  EVIDENCE_DELETE
+  REPORT_GENERATE
+  SECURITY_ALERT
+}
+
+// -------------------------------------------------------------
+// AUTH & USER MODELS
+// -------------------------------------------------------------
+
+model User {
+  id               String       @id @default(cuid())
+  email            String       @unique
+  name             String
+  passwordHash     String
+  systemRole       SystemRole   @default(ANALYST)
+  isActive         Boolean      @default(true)
+  twoFactorEnabled Boolean      @default(false)
+  twoFactorSecret  String?
+  lastLoginAt      DateTime?
+  failedLoginCount Int          @default(0)
+  lockedUntil      DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  memberships      ProgramMembership[]
+  createdPrograms  Program[]            @relation("CreatedBy")
+  assignedTasks    Task[]               @relation("AssignedTasks")
+  createdFindings  Finding[]            @relation("FindingAuthor")
+  auditLogs        AuditLog[]
+  notes            Note[]
+
+  @@index([email])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  createdAt    DateTime @default(now())
+}
+
+// -------------------------------------------------------------
+// PROGRAM & SCOPING (MULTI-TENANCY / ISOLATION)
+// -------------------------------------------------------------
+
+model Program {
+  id          String              @id @default(cuid())
+  name        String
+  slug        String              @unique
+  description String?
+  scopeRules  String              @default("") // In-scope / Out-of-scope policies
+  isArchived  Boolean             @default(false)
+  createdById String
+  createdBy   User                @relation("CreatedBy", fields: [createdById], references: [id])
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  memberships          ProgramMembership[]
+  targets              Target[]
+  assets               Asset[]
+  osintRecords         OSINTRecord[]
+  intelligenceSources  IntelligenceSource[]
+  intelligenceQueries  IntelligenceQuery[]
+  reconPhases          ReconPhase[]
+  findings             Finding[]
+  auditLogs            AuditLog[]
+  notes                Note[]
+
+  @@index([slug])
+  @@index([createdById])
+}
+
+model ProgramMembership {
+  id        String      @id @default(cuid())
+  programId String
+  userId    String
+  role      ProgramRole @default(ANALYST)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  program   Program     @relation(fields: [programId], references: [id], onDelete: Cascade)
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([programId, userId])
+  @@index([programId])
+  @@index([userId])
+}
+
+// -------------------------------------------------------------
+// TARGET & ASSET MANAGEMENT
+// -------------------------------------------------------------
+
+model Target {
+  id                     String      @id @default(cuid())
+  programId              String
+  name                   String
+  primaryDomain          String
+  description            String?
+  authorizationConfirmed Boolean     @default(false) // Mandatory ethical authorization acknowledgement
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
+
+  program              Program              @relation(fields: [programId], references: [id], onDelete: Cascade)
+  assets               Asset[]
+  osintRecords         OSINTRecord[]
+  intelligenceQueries  IntelligenceQuery[]
+  reconPhases          ReconPhase[]
+  evidence             Evidence[]
+  findings             Finding[]
+
+  @@index([programId])
+  @@index([primaryDomain])
+}
+
+model Asset {
+  id               String       @id @default(cuid())
+  programId        String
+  targetId         String?
+  parentId         String?      // Recursive hierarchy (e.g., Domain -> Subdomain -> Endpoint)
+  type             AssetType
+  value            String       // e.g., 'api.target.com', '192.168.1.1', 'nginx 1.18'
+  confidence       Int          @default(100) // 0-100% confidence
+  inScope          Boolean      @default(true)
+  source           String?      // e.g., 'Manual', 'crt.sh', 'Wayback', 'DNS-DoH'
+  metadata         Json?        // Structured key-values (ports, status code, TLS cert info, ASN)
+  tags             String[]
+  firstSeenAt      DateTime     @default(now())
+  lastSeenAt       DateTime     @default(now())
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  program          Program      @relation(fields: [programId], references: [id], onDelete: Cascade)
+  target           Target?      @relation(fields: [targetId], references: [id], onDelete: SetNull)
+  parent           Asset?       @relation("AssetHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children         Asset[]      @relation("AssetHierarchy")
+  osintRecords     OSINTRecord[]
+  findings         Finding[]
+  evidenceItems    Evidence[]
+
+  @@index([programId])
+  @@index([targetId])
+  @@index([type])
+  @@index([value])
+}
+
+// -------------------------------------------------------------
+// OSINT & THREAT INTELLIGENCE
+// -------------------------------------------------------------
+
+model OSINTRecord {
+  id                 String       @id @default(cuid())
+  programId          String
+  targetId           String?
+  assetId            String?
+  title              String?
+  type               OSINTType
+  source             String       // e.g., 'crt.sh', 'SecurityTrails', 'GitHub', 'Pastebin', 'Wayback'
+  url                String?      // Source URL if applicable
+  rawData            Json         // Raw payload / response
+  summary            String       // Sanitized narrative summary
+  securityRelevance  SecurityRelevance @default(LOW) // LOW, MEDIUM, HIGH
+  tags               String[]
+  extractedEntities  Json?        // IPs, domains, emails, technologies, people discovered
+  collectedAt        DateTime     @default(now())
+
+  program            Program      @relation(fields: [programId], references: [id], onDelete: Cascade)
+  target             Target?      @relation(fields: [targetId], references: [id], onDelete: SetNull)
+  asset              Asset?       @relation(fields: [assetId], references: [id], onDelete: SetNull)
+
+  @@index([programId])
+  @@index([targetId])
+  @@index([type])
+  @@index([securityRelevance])
+}
+
+model IntelligenceSource {
+  id          String                 @id @default(cuid())
+  programId   String
+  name        String                 // e.g. "GitHub Search", "CertStream", "HaveIBeenPwned", "Pastebin Index"
+  type        IntelligenceSourceType @default(OTHER) // NEWS, BLOG, FORUM, CODE, DOCUMENT, BREACH, OTHER
+  baseURL     String?
+  config      Json?
+  isActive    Boolean                @default(true)
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+
+  program     Program                @relation(fields: [programId], references: [id], onDelete: Cascade)
+
+  @@index([programId])
+}
+
+model IntelligenceQuery {
+  id            String    @id @default(cuid())
+  programId     String
+  targetId      String?
+  queryTemplate String    // e.g. "<domain> data breach", "site:github.com <domain>"
+  queryString   String    // Evaluated search query
+  lastRunAt     DateTime?
+  resultCount   Int       @default(0)
+  results       Json?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  program       Program   @relation(fields: [programId], references: [id], onDelete: Cascade)
+  target        Target?   @relation(fields: [targetId], references: [id], onDelete: SetNull)
+
+  @@index([programId])
+  @@index([targetId])
+}
+
+// -------------------------------------------------------------
+// STRUCTURED RECON WORKFLOW & EVIDENCE
+// -------------------------------------------------------------
+
+model ReconPhase {
+  id          String      @id @default(cuid())
+  programId   String
+  targetId    String?
+  name        String      // e.g. "Asset Discovery", "Subdomain Enumeration", etc.
+  orderIndex  Int         @default(0)
+  status      TaskStatus  @default(TODO)
+  description String?
+  notes       String?     // Analyst markdown notes for this phase
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  program     Program     @relation(fields: [programId], references: [id], onDelete: Cascade)
+  target      Target?     @relation(fields: [targetId], references: [id], onDelete: SetNull)
+  tasks       Task[]
+
+  @@index([programId])
+  @@index([targetId])
+}
+
+model Task {
+  id           String      @id @default(cuid())
+  phaseId      String
+  title        String
+  description  String?
+  status       TaskStatus  @default(TODO)
+  assignedToId String?
+  dueDate      DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  phase        ReconPhase  @relation(fields: [phaseId], references: [id], onDelete: Cascade)
+  assignedTo   User?       @relation("AssignedTasks", fields: [assignedToId], references: [id], onDelete: SetNull)
+  evidence     Evidence[]
+
+  @@index([phaseId])
+  @@index([status])
+}
+
+model Evidence {
+  id            String   @id @default(cuid())
+  programId     String
+  targetId      String?
+  assetId       String?
+  findingId     String?
+  taskId        String?
+  title         String
+  type          String   @default("IMAGE") // IMAGE, HTTP_RESPONSE, LOG, DOCUMENT, JSON_OUTPUT, OTHER
+  content       String?  // Sanitized markdown / textual output / HTTP snippet
+  storagePath   String?  // Relative path on disk
+  metadata      Json?    // originalName, mimeType, sizeBytes, sha256
+  uploadedById  String?
+  createdAt     DateTime @default(now())
+
+  program       Program  @relation(fields: [programId], references: [id], onDelete: Cascade)
+  target        Target?  @relation(fields: [targetId], references: [id], onDelete: SetNull)
+  task          Task?    @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  asset         Asset?   @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  finding       Finding? @relation(fields: [findingId], references: [id], onDelete: SetNull)
+
+  @@index([programId])
+  @@index([targetId])
+  @@index([taskId])
+  @@index([assetId])
+  @@index([findingId])
+}
+
+// -------------------------------------------------------------
+// FINDINGS MANAGEMENT
+// -------------------------------------------------------------
+
+model Finding {
+  id                String          @id @default(cuid())
+  programId         String
+  targetId          String?
+  assetId           String?
+  affectedAssetIds  String[]        // Multiple affected asset IDs
+  evidenceIds       String[]        // Linked evidence item IDs
+  authorId          String
+  title             String
+  severity          FindingSeverity @default(LOW)
+  status            FindingStatus   @default(DRAFT)
+  description       String          // Detailed description
+  impact            String?         // Business and technical impact
+  remediation       String?         // Steps to fix
+  cveId             String?         // e.g., CVE-2023-XXXXX
+  cvssScore         Float?          // 0.0 - 10.0
+  notes             String?         // Internal analyst notes
+  evidenceItems     Evidence[]
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  program           Program         @relation(fields: [programId], references: [id], onDelete: Cascade)
+  target            Target?         @relation(fields: [targetId], references: [id], onDelete: SetNull)
+  asset             Asset?          @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  author            User            @relation("FindingAuthor", fields: [authorId], references: [id])
+
+  @@index([programId])
+  @@index([targetId])
+  @@index([severity])
+  @@index([status])
+}
+
+model Note {
+  id        String   @id @default(cuid())
+  programId String
+  authorId  String
+  title     String
+  content   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  program   Program  @relation(fields: [programId], references: [id], onDelete: Cascade)
+  author    User     @relation(fields: [authorId], references: [id])
+
+  @@index([programId])
+}
+
+// -------------------------------------------------------------
+// AUDIT LOGGING (APPEND-ONLY)
+// -------------------------------------------------------------
+
+model AuditLog {
+  id          String      @id @default(cuid())
+  programId   String?
+  userId      String?
+  action      AuditAction
+  entityType  String      // "Asset", "Target", "Finding", "User", "Program"
+  entityId    String?
+  ipAddress   String?
+  userAgent   String?
+  details     Json        // State before/after or event metadata
+  timestamp   DateTime    @default(now())
+
+  program     Program?    @relation(fields: [programId], references: [id], onDelete: SetNull)
+  user        User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([programId])
+  @@index([userId])
+  @@index([action])
+  @@index([timestamp])
+}
