@@ -24,7 +24,7 @@ async function verifyTokenEdge(token: string): Promise<SessionClaims | null> {
   }
 }
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Protect /programs and /admin routes
@@ -75,6 +75,8 @@ export async function middleware(request: NextRequest) {
 
   return response;
 }
+
+export default proxy;
 
 export const config = {
   matcher: [
