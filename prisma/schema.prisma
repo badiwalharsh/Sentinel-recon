@@ -183,6 +183,7 @@ model Program {
   intelligenceQueries  IntelligenceQuery[]
   reconPhases          ReconPhase[]
   findings             Finding[]
+  evidence             Evidence[]
   auditLogs            AuditLog[]
   notes                Note[]
 
