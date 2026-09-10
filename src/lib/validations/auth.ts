@@ -32,6 +32,14 @@ export const updateRoleSchema = z.object({
   isActive: z.boolean().optional(),
 });
 
+export const adminCreateUserSchema = z.object({
+  name: z.string().min(1, 'Name or handle is required').max(60),
+  email: z.string().email('Invalid email / login ID format').toLowerCase().trim(),
+  password: z.string().min(6, 'Password must be at least 6 characters'),
+  systemRole: z.enum(['ADMIN', 'ANALYST', 'VIEWER', 'AUDITOR']).default('ANALYST'),
+});
+
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type UpdateRoleInput = z.infer<typeof updateRoleSchema>;
+export type AdminCreateUserInput = z.infer<typeof adminCreateUserSchema>;
