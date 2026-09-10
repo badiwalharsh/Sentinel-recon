@@ -4,7 +4,7 @@ import { jwtVerify } from 'jose';
 
 const SESSION_COOKIE_NAME = 'sentinel_session';
 const SECRET_KEY = new TextEncoder().encode(
-  process.env.NEXTAUTH_SECRET || 'default-sentinel-recon-jwt-session-secret-key-32chars!'
+  process.env.NEXTAUTH_SECRET || 'reconflow-production-ready-jwt-session-secret-key-32bytes-min!'
 );
 
 interface SessionClaims {
@@ -27,11 +27,12 @@ async function verifyTokenEdge(token: string): Promise<SessionClaims | null> {
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Protect /programs and /admin routes
-  const isProgramRoute = pathname.startsWith('/programs');
+  // Protect /dashboard, /programs and /admin routes
+  const isProtectedRoute = pathname.startsWith('/dashboard') || pathname.startsWith('/programs');
   const isAdminRoute = pathname.startsWith('/admin') || pathname.startsWith('/api/v1/admin');
 
-  if (isProgramRoute || isAdminRoute) {
+  if (isProtectedRoute || isAdminRoute) {
+
     const sessionCookie = request.cookies.get(SESSION_COOKIE_NAME)?.value;
 
     if (!sessionCookie) {

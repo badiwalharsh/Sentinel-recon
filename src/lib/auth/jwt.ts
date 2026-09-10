@@ -2,8 +2,9 @@ import { SignJWT, jwtVerify } from 'jose';
 import bcrypt from 'bcryptjs';
 
 const SECRET_KEY = new TextEncoder().encode(
-  process.env.NEXTAUTH_SECRET || 'default-sentinel-recon-jwt-session-secret-key-32chars!'
+  process.env.NEXTAUTH_SECRET || 'reconflow-production-ready-jwt-session-secret-key-32bytes-min!'
 );
+
 
 export interface TokenPayload {
   userId: string;

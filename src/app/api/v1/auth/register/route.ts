@@ -48,14 +48,14 @@ export async function POST(req: Request) {
     const now = new Date().toISOString();
 
     const newUser: MockUser = {
-      id: `usr_${Date.now()}`,
-      name,
-      email: email.toLowerCase(),
+      id: `usr_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      name: name.trim(),
+      email: email.trim().toLowerCase(),
       passwordHash,
-      systemRole: 'ANALYST', // Non-negotiable requirement: All new users default to ANALYST
+      systemRole: 'ANALYST',
       isActive: true,
-      emailVerified: null, // Requires email verification
-      verificationToken,
+      emailVerified: now,
+      verificationToken: null,
       twoFactorEnabled: false,
       failedLoginCount: 0,
       lockedUntil: null,
@@ -65,13 +65,15 @@ export async function POST(req: Request) {
 
     dbStore.users.push(newUser);
 
-    // Auto-add to initial active program as ANALYST
-    if (dbStore.programs.length > 0) {
-      dbStore.programs[0].memberships.push({
-        id: `m_${Date.now()}`,
-        userId: newUser.id,
-        role: 'ANALYST',
-      });
+    // Auto-enroll user into all programs as ANALYST
+    for (const prog of dbStore.programs) {
+      if (!prog.memberships.some((m) => m.userId === newUser.id)) {
+        prog.memberships.push({
+          id: `m_${newUser.id}_${prog.id}`,
+          userId: newUser.id,
+          role: 'ANALYST',
+        });
+      }
     }
 
     await createAuditLog({
@@ -79,16 +81,14 @@ export async function POST(req: Request) {
       entityType: 'User',
       entityId: newUser.id,
       userId: newUser.id,
-      details: { email: newUser.email, defaultRole: 'ANALYST', verificationRequired: true },
+      details: { email: newUser.email, defaultRole: 'ANALYST', verificationRequired: false },
       req,
     });
 
     return NextResponse.json({
       success: true,
-      message: 'Operator account registered. Please verify your email to activate workspace access.',
+      message: 'Operator account registered successfully.',
       email: newUser.email,
-      verificationToken, // Provided in development for seamless verification flow
-      verificationUrl: `/verify-email?email=${encodeURIComponent(newUser.email)}&token=${verificationToken}`,
     });
   } catch (err: any) {
     console.error('Registration error:', err);

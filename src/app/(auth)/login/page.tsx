@@ -1,24 +1,40 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { Lock, Mail, Terminal, AlertCircle, ShieldAlert } from 'lucide-react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Lock, Mail, Terminal, AlertCircle, ShieldAlert, CheckCircle2, Eye, EyeOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
-  const [email, setEmail] = useState('');
+  const searchParams = useSearchParams();
+  const emailParam = searchParams.get('email') || '';
+  const isRegistered = searchParams.get('registered') === 'true';
+
+  const [email, setEmail] = useState(emailParam);
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [authenticatingText, setAuthenticatingText] = useState('Authenticate & Open Workspace');
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(
+    isRegistered ? 'Operator account created. Enter your passphrase below to open workspace.' : null
+  );
+
+  useEffect(() => {
+    if (emailParam) {
+      setEmail(emailParam);
+    }
+  }, [emailParam]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    setAuthenticatingText('Authenticating credentials...');
 
     try {
       const res = await fetch('/api/v1/auth/login', {
@@ -32,14 +48,19 @@ export default function LoginPage() {
       if (!res.ok) {
         setError(data.error || 'Authentication failed. Please verify your credentials.');
         setLoading(false);
+        setAuthenticatingText('Authenticate & Open Workspace');
         return;
       }
 
-      router.push('/dashboard');
-      router.refresh();
+      setAuthenticatingText('Opening workspace...');
+      setSuccess('Session verified. Redirecting to operational console...');
+
+      // Force full navigation to guarantee fresh cookies and state in Next.js
+      window.location.href = '/dashboard';
     } catch (err) {
       setError('Connection to security gateway failed.');
       setLoading(false);
+      setAuthenticatingText('Authenticate & Open Workspace');
     }
   };
 
@@ -58,6 +79,13 @@ export default function LoginPage() {
       </CardHeader>
 
       <CardContent className="space-y-5 pt-4">
+        {success && (
+          <div className="p-3 rounded-lg bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 text-xs font-mono flex items-start gap-2.5">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+            <span>{success}</span>
+          </div>
+        )}
+
         {error && (
           <div className="p-3 rounded-lg bg-rose-950/50 border border-rose-500/40 text-rose-300 text-xs font-mono flex items-start gap-2.5">
             <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
@@ -67,7 +95,7 @@ export default function LoginPage() {
 
         <form onSubmit={handleLogin} className="space-y-4">
           <Input
-            label="OPERATOR EMAIL"
+            label="OPERATOR EMAIL / LOGIN ID"
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
@@ -78,16 +106,31 @@ export default function LoginPage() {
           />
 
           <div className="space-y-1">
-            <Input
-              label="PASSPHRASE"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••••••"
-              leftIcon={<Lock className="w-4 h-4" />}
-              required
-              autoComplete="current-password"
-            />
+            <div className="space-y-1.5">
+              <label className="block text-xs font-mono font-medium text-slate-300">PASSPHRASE</label>
+              <div className="relative flex items-center">
+                <div className="absolute left-3 text-slate-400 pointer-events-none">
+                  <Lock className="w-4 h-4" />
+                </div>
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••••••"
+                  required
+                  autoComplete="current-password"
+                  className="w-full bg-slate-950/70 border border-slate-700/80 rounded-md text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 pl-9 pr-10 py-2 font-mono"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 text-slate-400 hover:text-slate-200"
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
             <div className="flex justify-end pt-1">
               <Link
                 href="/forgot-password"
@@ -99,7 +142,7 @@ export default function LoginPage() {
           </div>
 
           <Button type="submit" variant="primary" loading={loading} className="w-full font-mono text-xs py-2.5">
-            Authenticate & Open Workspace
+            {authenticatingText}
           </Button>
         </form>
 
@@ -118,3 +161,12 @@ export default function LoginPage() {
     </Card>
   );
 }
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="text-center p-8 text-slate-400 font-mono text-xs">Loading authentication portal...</div>}>
+      <LoginForm />
+    </Suspense>
+  );
+}
+

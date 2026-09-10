@@ -78,12 +78,23 @@ export default function RegisterPage() {
         return;
       }
 
-      // Redirect to email verification page with token
-      if (data.verificationToken) {
-        router.push(`/verify-email?email=${encodeURIComponent(email.trim().toLowerCase())}&token=${encodeURIComponent(data.verificationToken)}`);
-      } else {
-        router.push(`/verify-email?email=${encodeURIComponent(email.trim().toLowerCase())}`);
+      // Automatically authenticate the newly registered user
+      try {
+        const loginRes = await fetch('/api/v1/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
+        });
+
+        if (loginRes.ok) {
+          window.location.href = '/dashboard';
+          return;
+        }
+      } catch {
+        // Fallback to login page
       }
+
+      window.location.href = `/login?registered=true&email=${encodeURIComponent(email.trim().toLowerCase())}`;
     } catch (err) {
       setError('Connection to security gateway failed.');
       setLoading(false);

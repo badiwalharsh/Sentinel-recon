@@ -95,6 +95,17 @@ export async function POST(req: Request) {
     user.failedLoginCount = 0;
     user.lockedUntil = null;
 
+    // Ensure user has membership in programs so dashboard displays data
+    for (const prog of dbStore.programs) {
+      if (!prog.memberships.some((m) => m.userId === user.id)) {
+        prog.memberships.push({
+          id: `m_${user.id}_${prog.id}`,
+          userId: user.id,
+          role: user.systemRole === 'ADMIN' ? 'LEAD_ANALYST' : user.systemRole === 'VIEWER' ? 'VIEWER' : user.systemRole === 'AUDITOR' ? 'AUDITOR' : 'ANALYST',
+        });
+      }
+    }
+
     // Sign JWT
     const token = await signSessionToken({
       userId: user.id,
@@ -124,11 +135,11 @@ export async function POST(req: Request) {
       },
     });
 
-    // Set secure cookie
+    // Set secure cookie with lax SameSite for seamless immediate redirection
     response.cookies.set(SESSION_COOKIE_NAME, token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
+      sameSite: 'lax',
       maxAge: 60 * 60 * 24, // 24 hours
       path: '/',
     });
@@ -138,4 +149,5 @@ export async function POST(req: Request) {
     console.error('Login error:', err);
     return NextResponse.json({ error: 'Authentication internal server error' }, { status: 500 });
   }
+
 }

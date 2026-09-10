@@ -1271,7 +1271,7 @@ declare global {
   var __mockStore: MemoryDataStore | undefined;
 }
 
-export const dbStore = global.__mockStore || new MemoryDataStore();
-if (process.env.NODE_ENV !== 'production') {
-  global.__mockStore = dbStore;
-}
+const globalForStore = globalThis as unknown as { __mockStore?: MemoryDataStore };
+export const dbStore = globalForStore.__mockStore || new MemoryDataStore();
+globalForStore.__mockStore = dbStore;
+
