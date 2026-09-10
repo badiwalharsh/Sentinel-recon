@@ -76,6 +76,9 @@ export async function POST(req: Request) {
       }
     }
 
+    // Persist immediately to disk
+    dbStore.persist();
+
     await createAuditLog({
       action: 'USER_REGISTER',
       entityType: 'User',

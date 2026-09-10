@@ -111,6 +111,9 @@ export async function POST(req: Request) {
       }
     }
 
+    // Persist immediately to storage
+    dbStore.persist();
+
     await createAuditLog({
       action: 'USER_REGISTER',
       entityType: 'User',
@@ -203,6 +206,9 @@ export async function PUT(req: Request) {
       }
     }
 
+    // Persist immediately to storage
+    dbStore.persist();
+
     await createAuditLog({
       action: 'MEMBERSHIP_ADD',
       entityType: 'ProgramMembership',
@@ -278,6 +284,9 @@ export async function PATCH(req: Request) {
     // Invalidate existing sessions for the target user immediately
     targetUser.tokenVersion = (targetUser.tokenVersion || 1) + 1;
 
+    // Persist immediately to storage
+    dbStore.persist();
+
     await createAuditLog({
       action: 'USER_ROLE_CHANGE',
       entityType: 'User',
@@ -292,5 +301,6 @@ export async function PATCH(req: Request) {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
+
 
 

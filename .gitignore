@@ -42,6 +42,8 @@ next-env.d.ts
 test-results/
 playwright-report/
 
-# storage uploads
+# storage uploads & local state persistence
 storage/evidence/*
 !storage/evidence/.gitkeep
+storage/*.json
+

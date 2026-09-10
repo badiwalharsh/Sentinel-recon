@@ -1,4 +1,10 @@
 import bcrypt from 'bcryptjs';
+import fs from 'fs';
+import path from 'path';
+
+const PERSISTENCE_DIR = path.join(process.cwd(), 'storage');
+const PERSISTENCE_FILE = path.join(PERSISTENCE_DIR, 'db-state.json');
+
 
 export interface MockUser {
   id: string;
@@ -224,7 +230,96 @@ class MemoryDataStore {
   auditLogs: MockAuditLog[] = [];
 
   constructor() {
-    this.seed();
+    const loaded = this.load();
+    if (!loaded) {
+      this.seed();
+      this.save();
+    }
+  }
+
+  public persist() {
+    this.save();
+  }
+
+  public save() {
+    try {
+      if (!fs.existsSync(PERSISTENCE_DIR)) {
+        fs.mkdirSync(PERSISTENCE_DIR, { recursive: true });
+      }
+      const state = {
+        users: this.users,
+        programs: this.programs,
+        targets: this.targets,
+        assets: this.assets,
+        osintRecords: this.osintRecords,
+        intelligenceSources: this.intelligenceSources,
+        intelligenceQueries: this.intelligenceQueries,
+        phases: this.phases,
+        tasks: this.tasks,
+        evidence: this.evidence,
+        findings: this.findings,
+        auditLogs: this.auditLogs,
+      };
+      fs.writeFileSync(PERSISTENCE_FILE, JSON.stringify(state, null, 2), 'utf-8');
+    } catch (e) {
+      // In read-only or sandboxed serverless instances, memory persistence remains active
+    }
+  }
+
+  public load(): boolean {
+    try {
+      if (fs.existsSync(PERSISTENCE_FILE)) {
+        const raw = fs.readFileSync(PERSISTENCE_FILE, 'utf-8');
+        if (raw && raw.trim().length > 0) {
+          const state = JSON.parse(raw);
+          if (Array.isArray(state.users) && state.users.length > 0) {
+            this.users = state.users;
+            if (Array.isArray(state.programs)) this.programs = state.programs;
+            if (Array.isArray(state.targets)) this.targets = state.targets;
+            if (Array.isArray(state.assets)) this.assets = state.assets;
+            if (Array.isArray(state.osintRecords)) this.osintRecords = state.osintRecords;
+            if (Array.isArray(state.intelligenceSources)) this.intelligenceSources = state.intelligenceSources;
+            if (Array.isArray(state.intelligenceQueries)) this.intelligenceQueries = state.intelligenceQueries;
+            if (Array.isArray(state.phases)) this.phases = state.phases;
+            if (Array.isArray(state.tasks)) this.tasks = state.tasks;
+            if (Array.isArray(state.evidence)) this.evidence = state.evidence;
+            if (Array.isArray(state.findings)) this.findings = state.findings;
+            if (Array.isArray(state.auditLogs)) this.auditLogs = state.auditLogs;
+
+            this.ensureAdminInLoadedState();
+            return true;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[DataStore] Notice: initializing fresh storage baseline.');
+    }
+    return false;
+  }
+
+  private ensureAdminInLoadedState() {
+    const adminEmail = (process.env.ADMIN_EMAIL || 'admin@reconflow.local').toLowerCase().trim();
+    const adminPassword = process.env.ADMIN_PASSWORD || 'Admin@ReconFlow2026!';
+    const hasAdmin = this.users.some((u) => u.systemRole === 'ADMIN' || u.email.toLowerCase() === adminEmail);
+    if (!hasAdmin) {
+      const adminHash = bcrypt.hashSync(adminPassword, 10);
+      const now = new Date().toISOString();
+      const adminUser: MockUser = {
+        id: 'usr_admin_bootstrap',
+        email: adminEmail,
+        name: 'System Administrator (SecOps)',
+        passwordHash: adminHash,
+        systemRole: 'ADMIN',
+        isActive: true,
+        emailVerified: now,
+        twoFactorEnabled: false,
+        failedLoginCount: 0,
+        lockedUntil: null,
+        tokenVersion: 1,
+        createdAt: now,
+      };
+      this.users.unshift(adminUser);
+    }
   }
 
   private seed() {
