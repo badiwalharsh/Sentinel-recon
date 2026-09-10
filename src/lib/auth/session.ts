@@ -3,6 +3,7 @@ import { verifySessionToken, TokenPayload } from './jwt';
 import { dbStore } from '../db-store';
 
 export const SESSION_COOKIE_NAME = 'sentinel_session';
+export const ELEVATION_COOKIE_NAME = 'sentinel_admin_elevation';
 
 export async function getCurrentUser(): Promise<TokenPayload | null> {
   try {
@@ -49,5 +50,23 @@ export async function getCurrentUser(): Promise<TokenPayload | null> {
     return null;
   }
 }
+
+export async function isAdminElevated(userId?: string): Promise<boolean> {
+  try {
+    const cookieStore = await cookies();
+    const elevationToken = cookieStore.get(ELEVATION_COOKIE_NAME)?.value;
+    if (!elevationToken) return false;
+
+    const { verifyElevationToken } = await import('./jwt');
+    const verified = await verifyElevationToken(elevationToken);
+    if (!verified) return false;
+
+    if (userId && verified.userId !== userId) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 
 

@@ -40,3 +40,24 @@ export async function verifySessionToken(token: string): Promise<TokenPayload | 
     return null;
   }
 }
+
+export async function signElevationToken(userId: string, email: string): Promise<string> {
+  return new SignJWT({ userId, email, elevated: true, purpose: 'ADMIN_PANEL_ACCESS' })
+    .setProtectedHeader({ alg: 'HS256' })
+    .setIssuedAt()
+    .setExpirationTime('2h')
+    .sign(SECRET_KEY);
+}
+
+export async function verifyElevationToken(token: string): Promise<{ userId: string; email: string } | null> {
+  try {
+    const { payload } = await jwtVerify(token, SECRET_KEY);
+    if (payload.elevated === true && payload.purpose === 'ADMIN_PANEL_ACCESS') {
+      return { userId: payload.userId as string, email: payload.email as string };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+

@@ -1,9 +1,9 @@
 import React from 'react';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { getCurrentUser } from '@/lib/auth/session';
-import { Shield, Users, FileCheck, ArrowLeft, Terminal, LayoutDashboard } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { getCurrentUser, isAdminElevated } from '@/lib/auth/session';
+import { ArrowLeft, Terminal } from 'lucide-react';
+import { AdminPasscodeGate } from '@/components/admin/admin-passcode-gate';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,6 +13,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   if (!user || user.systemRole !== 'ADMIN') {
     redirect('/dashboard');
   }
+
+  const isElevated = await isAdminElevated(user.userId);
 
   return (
     <div className="min-h-screen flex flex-col bg-[#070b14] text-slate-100">
@@ -63,7 +65,12 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         </div>
       </header>
 
-      <main className="flex-1 max-w-7xl mx-auto w-full p-6">{children}</main>
+      <main className="flex-1 max-w-7xl mx-auto w-full p-6">
+        <AdminPasscodeGate initialElevated={isElevated}>
+          {children}
+        </AdminPasscodeGate>
+      </main>
     </div>
   );
 }
+
