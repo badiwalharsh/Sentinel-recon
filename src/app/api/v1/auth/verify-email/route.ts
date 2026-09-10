@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { dbStore } from '@/lib/db-store';
 import { signSessionToken } from '@/lib/auth/jwt';
-import { SESSION_COOKIE_NAME } from '@/lib/auth/session';
+import { SESSION_COOKIE_NAME, getSessionCookieOptions } from '@/lib/auth/session';
 import { createAuditLog } from '@/lib/audit';
 
 export async function POST(req: Request) {
@@ -11,6 +11,10 @@ export async function POST(req: Request) {
 
     if (!email || !token) {
       return NextResponse.json({ error: 'Email and verification token are required' }, { status: 400 });
+    }
+
+    if (typeof dbStore.sync === 'function') {
+      dbStore.sync();
     }
 
     const user = dbStore.users.find((u) => u.email.toLowerCase() === email.toLowerCase().trim());
@@ -34,13 +38,8 @@ export async function POST(req: Request) {
         user: { id: user.id, name: user.name, email: user.email, systemRole: user.systemRole },
       });
 
-      response.cookies.set(SESSION_COOKIE_NAME, sessionToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'strict',
-        maxAge: 60 * 60 * 24,
-        path: '/',
-      });
+      const cookieOptions = getSessionCookieOptions(req);
+      response.cookies.set(SESSION_COOKIE_NAME, sessionToken, cookieOptions);
 
       return response;
     }
@@ -82,13 +81,8 @@ export async function POST(req: Request) {
       },
     });
 
-    response.cookies.set(SESSION_COOKIE_NAME, sessionToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 60 * 60 * 24,
-      path: '/',
-    });
+    const cookieOptions = getSessionCookieOptions(req);
+    response.cookies.set(SESSION_COOKIE_NAME, sessionToken, cookieOptions);
 
     return response;
   } catch (err: any) {

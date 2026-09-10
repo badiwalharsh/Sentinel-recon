@@ -170,9 +170,11 @@ export async function POST(req: Request) {
     });
 
     // Set secure elevation cookie
+    const isHttps = req.headers.get('x-forwarded-proto') === 'https' || req.url.startsWith('https://');
+    const isProd = process.env.NODE_ENV === 'production';
     response.cookies.set(ELEVATION_COOKIE_NAME, elevationToken, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: isProd ? isHttps : false,
       sameSite: 'lax',
       maxAge: 60 * 60 * 2, // 2 hours
       path: '/',

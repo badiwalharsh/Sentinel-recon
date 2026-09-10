@@ -3,9 +3,12 @@ import type { NextRequest } from 'next/server';
 import { jwtVerify } from 'jose';
 
 const SESSION_COOKIE_NAME = 'sentinel_session';
-const SECRET_KEY = new TextEncoder().encode(
-  process.env.NEXTAUTH_SECRET || 'reconflow-production-ready-jwt-session-secret-key-32bytes-min!'
-);
+const SECRET_RAW =
+  process.env.NEXTAUTH_SECRET ||
+  process.env.JWT_SECRET ||
+  process.env.AUTH_SECRET ||
+  'reconflow-production-ready-jwt-session-secret-key-32bytes-min!';
+const SECRET_KEY = new TextEncoder().encode(SECRET_RAW);
 
 interface SessionClaims {
   userId: string;
@@ -26,15 +29,26 @@ async function verifyTokenEdge(token: string): Promise<SessionClaims | null> {
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
+  const sessionCookie = request.cookies.get(SESSION_COOKIE_NAME)?.value;
+
+  // Auto-redirect authenticated operators away from auth gateways
+  const isAuthPage = pathname === '/login' || pathname === '/register';
+  if (isAuthPage && sessionCookie) {
+    const claims = await verifyTokenEdge(sessionCookie);
+    if (claims && claims.userId) {
+      const callbackUrl = request.nextUrl.searchParams.get('callbackUrl');
+      if (callbackUrl && callbackUrl.startsWith('/') && !callbackUrl.startsWith('//') && callbackUrl !== '/login') {
+        return NextResponse.redirect(new URL(callbackUrl, request.url));
+      }
+      return NextResponse.redirect(new URL('/dashboard', request.url));
+    }
+  }
 
   // Protect /dashboard, /programs and /admin routes
   const isProtectedRoute = pathname.startsWith('/dashboard') || pathname.startsWith('/programs');
   const isAdminRoute = pathname.startsWith('/admin') || pathname.startsWith('/api/v1/admin');
 
   if (isProtectedRoute || isAdminRoute) {
-
-    const sessionCookie = request.cookies.get(SESSION_COOKIE_NAME)?.value;
-
     if (!sessionCookie) {
       if (pathname.startsWith('/api/')) {
         return NextResponse.json({ error: 'Unauthorized: Authentication required' }, { status: 401 });
@@ -45,7 +59,7 @@ export async function proxy(request: NextRequest) {
     }
 
     const claims = await verifyTokenEdge(sessionCookie);
-    if (!claims) {
+    if (!claims || !claims.userId) {
       if (pathname.startsWith('/api/')) {
         return NextResponse.json({ error: 'Unauthorized: Invalid or expired session' }, { status: 401 });
       }

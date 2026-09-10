@@ -13,6 +13,7 @@ function LoginForm() {
   const searchParams = useSearchParams();
   const emailParam = searchParams.get('email') || '';
   const isRegistered = searchParams.get('registered') === 'true';
+  const callbackUrl = searchParams.get('callbackUrl') || '';
 
   const [email, setEmail] = useState(emailParam);
   const [password, setPassword] = useState('');
@@ -55,8 +56,14 @@ function LoginForm() {
       setAuthenticatingText('Opening workspace...');
       setSuccess('Session verified. Redirecting to operational console...');
 
-      // Force full navigation to guarantee fresh cookies and state in Next.js
-      window.location.href = '/dashboard';
+      // Determine redirect target cleanly
+      let targetUrl = '/dashboard';
+      if (callbackUrl && callbackUrl.startsWith('/') && !callbackUrl.startsWith('//') && callbackUrl !== '/login') {
+        targetUrl = callbackUrl;
+      }
+
+      // Smooth instant transition
+      window.location.replace(targetUrl);
     } catch (err) {
       setError('Connection to security gateway failed.');
       setLoading(false);

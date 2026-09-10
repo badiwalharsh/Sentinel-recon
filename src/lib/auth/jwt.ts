@@ -2,7 +2,10 @@ import { SignJWT, jwtVerify } from 'jose';
 import bcrypt from 'bcryptjs';
 
 const SECRET_KEY = new TextEncoder().encode(
-  process.env.NEXTAUTH_SECRET || 'reconflow-production-ready-jwt-session-secret-key-32bytes-min!'
+  process.env.NEXTAUTH_SECRET ||
+    process.env.JWT_SECRET ||
+    process.env.AUTH_SECRET ||
+    'reconflow-production-ready-jwt-session-secret-key-32bytes-min!'
 );
 
 

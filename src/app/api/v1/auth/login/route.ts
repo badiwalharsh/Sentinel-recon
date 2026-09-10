@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { dbStore } from '@/lib/db-store';
 import { signSessionToken } from '@/lib/auth/jwt';
-import { SESSION_COOKIE_NAME } from '@/lib/auth/session';
+import { SESSION_COOKIE_NAME, getSessionCookieOptions } from '@/lib/auth/session';
 import { loginSchema } from '@/lib/validations/auth';
 import { createAuditLog } from '@/lib/audit';
 import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
@@ -38,8 +38,13 @@ export async function POST(req: Request) {
 
     const { email, password } = parsed.data;
 
+    // Ensure database store is fresh
+    if (typeof dbStore.sync === 'function') {
+      dbStore.sync();
+    }
+
     // Check user in store
-    const user = dbStore.users.find((u) => u.email.toLowerCase() === email.toLowerCase());
+    const user = dbStore.users.find((u) => u.email.toLowerCase() === email.toLowerCase().trim());
 
     if (!user) {
       await createAuditLog({
@@ -88,6 +93,7 @@ export async function POST(req: Request) {
         req,
       });
 
+      dbStore.persist();
       return NextResponse.json({ error: 'Invalid email or password' }, { status: 401 });
     }
 
@@ -105,6 +111,8 @@ export async function POST(req: Request) {
         });
       }
     }
+
+    dbStore.persist();
 
     // Sign JWT
     const token = await signSessionToken({
@@ -136,13 +144,8 @@ export async function POST(req: Request) {
     });
 
     // Set secure cookie with lax SameSite for seamless immediate redirection
-    response.cookies.set(SESSION_COOKIE_NAME, token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 60 * 60 * 24, // 24 hours
-      path: '/',
-    });
+    const cookieOptions = getSessionCookieOptions(req);
+    response.cookies.set(SESSION_COOKIE_NAME, token, cookieOptions);
 
     return response;
   } catch (err: any) {

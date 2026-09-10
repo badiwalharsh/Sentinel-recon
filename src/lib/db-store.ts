@@ -241,6 +241,10 @@ class MemoryDataStore {
     this.save();
   }
 
+  public sync(): boolean {
+    return this.load();
+  }
+
   public save() {
     try {
       if (!fs.existsSync(PERSISTENCE_DIR)) {

@@ -5,6 +5,22 @@ import { dbStore } from '../db-store';
 export const SESSION_COOKIE_NAME = 'sentinel_session';
 export const ELEVATION_COOKIE_NAME = 'sentinel_admin_elevation';
 
+export function getSessionCookieOptions(req?: Request) {
+  const isProd = process.env.NODE_ENV === 'production';
+  let isHttps = false;
+  if (req) {
+    const proto = req.headers.get('x-forwarded-proto');
+    isHttps = proto === 'https' || req.url.startsWith('https://');
+  }
+  return {
+    httpOnly: true,
+    secure: isProd ? isHttps : false,
+    sameSite: 'lax' as const,
+    maxAge: 60 * 60 * 24, // 24 hours
+    path: '/',
+  };
+}
+
 export async function getCurrentUser(): Promise<TokenPayload | null> {
   try {
     const cookieStore = await cookies();
@@ -13,6 +29,11 @@ export async function getCurrentUser(): Promise<TokenPayload | null> {
 
     const payload = await verifySessionToken(token);
     if (!payload || !payload.userId) return null;
+
+    // Ensure store is synced across serverless invocations
+    if (typeof dbStore.sync === 'function') {
+      dbStore.sync();
+    }
 
     // Verify user is in datastore
     const user = dbStore.users.find(
