@@ -9,6 +9,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ programI
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const { programId } = await params;
+  if (typeof dbStore.sync === 'function') {
+    dbStore.sync();
+  }
   const program = dbStore.programs.find((p) => p.id === programId || p.slug === programId);
   if (!program) return NextResponse.json({ error: 'Program not found' }, { status: 404 });
 
@@ -172,6 +175,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ program
     };
 
     dbStore.findings.push(newFinding);
+    dbStore.persist();
 
     await createAuditLog({
       action: 'FINDING_CREATE',

@@ -10,6 +10,10 @@ export async function GET() {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  if (typeof dbStore.sync === 'function') {
+    dbStore.sync();
+  }
+
   // Admin sees all programs; others see programs they are members of
   let accessiblePrograms: MockProgram[] = [];
   if (user.systemRole === 'ADMIN') {
@@ -124,6 +128,8 @@ export async function POST(req: Request) {
         completedAt: null,
       }
     );
+
+    dbStore.persist();
 
     await createAuditLog({
       action: 'PROGRAM_CREATE',

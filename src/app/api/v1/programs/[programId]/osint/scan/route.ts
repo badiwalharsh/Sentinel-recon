@@ -369,6 +369,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ program
       });
     }
 
+    dbStore.persist();
+
     // Log the entire collection run to AuditLog
     await createAuditLog({
       action: 'OSINT_INGEST',

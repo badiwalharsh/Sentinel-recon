@@ -8,6 +8,10 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'Admin or Auditor privileges required' }, { status: 403 });
   }
 
+  if (typeof dbStore.sync === 'function') {
+    dbStore.sync();
+  }
+
   const { searchParams } = new URL(req.url);
   const action = searchParams.get('action');
   const entityType = searchParams.get('entityType');

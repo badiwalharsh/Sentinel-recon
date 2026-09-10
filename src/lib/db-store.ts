@@ -2,8 +2,17 @@ import bcrypt from 'bcryptjs';
 import fs from 'fs';
 import path from 'path';
 
-const PERSISTENCE_DIR = path.join(process.cwd(), 'storage');
-const PERSISTENCE_FILE = path.join(PERSISTENCE_DIR, 'db-state.json');
+function getPersistencePaths(): string[] {
+  const paths: string[] = [];
+  try {
+    paths.push(path.join(process.cwd(), 'storage', 'db-state.json'));
+  } catch {}
+  try {
+    const tmp = process.env.TMPDIR || process.env.TEMP || '/tmp';
+    paths.push(path.join(tmp, 'sentinel-recon-state.json'));
+  } catch {}
+  return paths;
+}
 
 
 export interface MockUser {
@@ -246,57 +255,64 @@ class MemoryDataStore {
   }
 
   public save() {
-    try {
-      if (!fs.existsSync(PERSISTENCE_DIR)) {
-        fs.mkdirSync(PERSISTENCE_DIR, { recursive: true });
+    const state = {
+      users: this.users,
+      programs: this.programs,
+      targets: this.targets,
+      assets: this.assets,
+      osintRecords: this.osintRecords,
+      intelligenceSources: this.intelligenceSources,
+      intelligenceQueries: this.intelligenceQueries,
+      phases: this.phases,
+      tasks: this.tasks,
+      evidence: this.evidence,
+      findings: this.findings,
+      auditLogs: this.auditLogs,
+    };
+    const serialized = JSON.stringify(state, null, 2);
+
+    for (const filePath of getPersistencePaths()) {
+      try {
+        const dir = path.dirname(filePath);
+        if (!fs.existsSync(dir)) {
+          fs.mkdirSync(dir, { recursive: true });
+        }
+        fs.writeFileSync(filePath, serialized, 'utf-8');
+      } catch (e) {
+        // Fall through to next available path
       }
-      const state = {
-        users: this.users,
-        programs: this.programs,
-        targets: this.targets,
-        assets: this.assets,
-        osintRecords: this.osintRecords,
-        intelligenceSources: this.intelligenceSources,
-        intelligenceQueries: this.intelligenceQueries,
-        phases: this.phases,
-        tasks: this.tasks,
-        evidence: this.evidence,
-        findings: this.findings,
-        auditLogs: this.auditLogs,
-      };
-      fs.writeFileSync(PERSISTENCE_FILE, JSON.stringify(state, null, 2), 'utf-8');
-    } catch (e) {
-      // In read-only or sandboxed serverless instances, memory persistence remains active
     }
   }
 
   public load(): boolean {
-    try {
-      if (fs.existsSync(PERSISTENCE_FILE)) {
-        const raw = fs.readFileSync(PERSISTENCE_FILE, 'utf-8');
-        if (raw && raw.trim().length > 0) {
-          const state = JSON.parse(raw);
-          if (Array.isArray(state.users) && state.users.length > 0) {
-            this.users = state.users;
-            if (Array.isArray(state.programs)) this.programs = state.programs;
-            if (Array.isArray(state.targets)) this.targets = state.targets;
-            if (Array.isArray(state.assets)) this.assets = state.assets;
-            if (Array.isArray(state.osintRecords)) this.osintRecords = state.osintRecords;
-            if (Array.isArray(state.intelligenceSources)) this.intelligenceSources = state.intelligenceSources;
-            if (Array.isArray(state.intelligenceQueries)) this.intelligenceQueries = state.intelligenceQueries;
-            if (Array.isArray(state.phases)) this.phases = state.phases;
-            if (Array.isArray(state.tasks)) this.tasks = state.tasks;
-            if (Array.isArray(state.evidence)) this.evidence = state.evidence;
-            if (Array.isArray(state.findings)) this.findings = state.findings;
-            if (Array.isArray(state.auditLogs)) this.auditLogs = state.auditLogs;
+    for (const filePath of getPersistencePaths()) {
+      try {
+        if (fs.existsSync(filePath)) {
+          const raw = fs.readFileSync(filePath, 'utf-8');
+          if (raw && raw.trim().length > 0) {
+            const state = JSON.parse(raw);
+            if (Array.isArray(state.users) && state.users.length > 0) {
+              this.users = state.users;
+              if (Array.isArray(state.programs)) this.programs = state.programs;
+              if (Array.isArray(state.targets)) this.targets = state.targets;
+              if (Array.isArray(state.assets)) this.assets = state.assets;
+              if (Array.isArray(state.osintRecords)) this.osintRecords = state.osintRecords;
+              if (Array.isArray(state.intelligenceSources)) this.intelligenceSources = state.intelligenceSources;
+              if (Array.isArray(state.intelligenceQueries)) this.intelligenceQueries = state.intelligenceQueries;
+              if (Array.isArray(state.phases)) this.phases = state.phases;
+              if (Array.isArray(state.tasks)) this.tasks = state.tasks;
+              if (Array.isArray(state.evidence)) this.evidence = state.evidence;
+              if (Array.isArray(state.findings)) this.findings = state.findings;
+              if (Array.isArray(state.auditLogs)) this.auditLogs = state.auditLogs;
 
-            this.ensureAdminInLoadedState();
-            return true;
+              this.ensureAdminInLoadedState();
+              return true;
+            }
           }
         }
+      } catch (e) {
+        // Try next fallback path
       }
-    } catch (e) {
-      console.warn('[DataStore] Notice: initializing fresh storage baseline.');
     }
     return false;
   }

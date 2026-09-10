@@ -43,7 +43,7 @@ export async function POST(req: Request) {
       action: 'SYSTEM_SETTINGS_UPDATE',
       entityType: 'SystemConfig',
       entityId: 'global',
-      userId: user.id,
+      userId: user.userId,
       details: { updatedSettings: systemSettings },
       req,
     });
