@@ -40,4 +40,15 @@ export const createTargetSchema = z.object({
   }),
 });
 
+export const adminAssignProgramsSchema = z.object({
+  userId: z.string().min(1, 'Target user ID is required'),
+  assignments: z.array(
+    z.object({
+      programId: z.string().min(1),
+      role: z.enum(['LEAD_ANALYST', 'ANALYST', 'VIEWER', 'AUDITOR']).default('ANALYST'),
+    })
+  ),
+});
+
 export const updateTargetSchema = createTargetSchema.partial();
+

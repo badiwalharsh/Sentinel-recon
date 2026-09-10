@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth/session';
 import { dbStore, MockUser } from '@/lib/db-store';
 import { updateRoleSchema, adminCreateUserSchema } from '@/lib/validations/auth';
+import { adminAssignProgramsSchema } from '@/lib/validations/program';
 import { createAuditLog } from '@/lib/audit';
 import bcrypt from 'bcryptjs';
 
@@ -11,20 +12,42 @@ export async function GET() {
     return NextResponse.json({ error: 'Admin privileges required' }, { status: 403 });
   }
 
-  const users = dbStore.users.map((u) => ({
-    id: u.id,
-    name: u.name,
-    email: u.email,
-    systemRole: u.systemRole,
-    isActive: u.isActive,
-    twoFactorEnabled: u.twoFactorEnabled,
-    failedLoginCount: u.failedLoginCount,
-    lockedUntil: u.lockedUntil,
-    createdAt: u.createdAt,
-    programsCount: dbStore.programs.filter((p) => p.memberships.some((m) => m.userId === u.id)).length,
+  const allPrograms = dbStore.programs.map((p) => ({
+    id: p.id,
+    name: p.name,
+    slug: p.slug,
+    description: p.description,
   }));
 
-  return NextResponse.json({ users });
+  const users = dbStore.users.map((u) => {
+    const userPrograms = dbStore.programs
+      .filter((p) => p.memberships.some((m) => m.userId === u.id))
+      .map((p) => {
+        const m = p.memberships.find((mem) => mem.userId === u.id);
+        return {
+          id: p.id,
+          name: p.name,
+          slug: p.slug,
+          role: m?.role || 'ANALYST',
+        };
+      });
+
+    return {
+      id: u.id,
+      name: u.name,
+      email: u.email,
+      systemRole: u.systemRole,
+      isActive: u.isActive,
+      twoFactorEnabled: u.twoFactorEnabled,
+      failedLoginCount: u.failedLoginCount,
+      lockedUntil: u.lockedUntil,
+      createdAt: u.createdAt,
+      programs: userPrograms,
+      programsCount: userPrograms.length,
+    };
+  });
+
+  return NextResponse.json({ users, allPrograms });
 }
 
 export async function POST(req: Request) {
@@ -102,6 +125,18 @@ export async function POST(req: Request) {
       req,
     });
 
+    const userPrograms = dbStore.programs
+      .filter((p) => p.memberships.some((m) => m.userId === newUser.id))
+      .map((p) => {
+        const m = p.memberships.find((mem) => mem.userId === newUser.id);
+        return {
+          id: p.id,
+          name: p.name,
+          slug: p.slug,
+          role: m?.role || 'ANALYST',
+        };
+      });
+
     return NextResponse.json({
       success: true,
       user: {
@@ -111,12 +146,106 @@ export async function POST(req: Request) {
         systemRole: newUser.systemRole,
         isActive: newUser.isActive,
         createdAt: newUser.createdAt,
-        programsCount: dbStore.programs.filter((p) => p.memberships.some((m) => m.userId === newUser.id)).length,
+        programs: userPrograms,
+        programsCount: userPrograms.length,
       },
     });
   } catch (err: any) {
     console.error('Admin create user error:', err);
     return NextResponse.json({ error: 'Failed to provision user' }, { status: 500 });
+  }
+}
+
+export async function PUT(req: Request) {
+  const user = await getCurrentUser();
+  if (!user || user.systemRole !== 'ADMIN') {
+    return NextResponse.json({ error: 'Admin privileges required' }, { status: 403 });
+  }
+
+  try {
+    const body = await req.json();
+    const parsed = adminAssignProgramsSchema.safeParse(body);
+
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: 'Invalid assignment payload', details: parsed.error.format() },
+        { status: 400 }
+      );
+    }
+
+    const { userId, assignments } = parsed.data;
+    const targetUser = dbStore.users.find((u) => u.id === userId);
+
+    if (!targetUser) {
+      return NextResponse.json({ error: 'User not found' }, { status: 404 });
+    }
+
+    // Update memberships across all programs
+    for (const prog of dbStore.programs) {
+      const assignment = assignments.find((a) => a.programId === prog.id);
+      const existingMemIndex = prog.memberships.findIndex((m) => m.userId === targetUser.id);
+
+      if (assignment) {
+        if (existingMemIndex >= 0) {
+          prog.memberships[existingMemIndex].role = assignment.role;
+        } else {
+          prog.memberships.push({
+            id: `m_${targetUser.id}_${prog.id}`,
+            userId: targetUser.id,
+            role: assignment.role,
+          });
+        }
+      } else {
+        // Unassign user from program
+        if (existingMemIndex >= 0) {
+          prog.memberships.splice(existingMemIndex, 1);
+        }
+      }
+    }
+
+    await createAuditLog({
+      action: 'MEMBERSHIP_ADD',
+      entityType: 'ProgramMembership',
+      entityId: targetUser.id,
+      userId: user.userId,
+      details: {
+        targetUserEmail: targetUser.email,
+        assignedProgramsCount: assignments.length,
+        assignments: assignments.map((a) => ({
+          programId: a.programId,
+          role: a.role,
+        })),
+        updatedByAdmin: user.email,
+      },
+      req,
+    });
+
+    const updatedPrograms = dbStore.programs
+      .filter((p) => p.memberships.some((m) => m.userId === targetUser.id))
+      .map((p) => {
+        const m = p.memberships.find((mem) => mem.userId === targetUser.id);
+        return {
+          id: p.id,
+          name: p.name,
+          slug: p.slug,
+          role: m?.role || 'ANALYST',
+        };
+      });
+
+    return NextResponse.json({
+      success: true,
+      user: {
+        id: targetUser.id,
+        email: targetUser.email,
+        name: targetUser.name,
+        systemRole: targetUser.systemRole,
+        programs: updatedPrograms,
+        programsCount: updatedPrograms.length,
+      },
+    });
+  } catch (err: any) {
+    console.error('Program assignment error:', err);
+    return NextResponse.json({ error: 'Failed to update program assignments' }, { status: 500 });
   }
 }
 
@@ -163,4 +292,5 @@ export async function PATCH(req: Request) {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
+
 
