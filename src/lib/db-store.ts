@@ -305,7 +305,7 @@ class MemoryDataStore {
               if (Array.isArray(state.findings)) this.findings = state.findings;
               if (Array.isArray(state.auditLogs)) this.auditLogs = state.auditLogs;
 
-              this.ensureAdminInLoadedState();
+              this.ensureDefaultRoleUsersInLoadedState();
               return true;
             }
           }
@@ -317,41 +317,88 @@ class MemoryDataStore {
     return false;
   }
 
-  private ensureAdminInLoadedState() {
-    const adminEmail = (process.env.ADMIN_EMAIL || 'admin@reconflow.local').toLowerCase().trim();
-    const adminPassword = process.env.ADMIN_PASSWORD || 'Admin@ReconFlow2026!';
-    const hasAdmin = this.users.some((u) => u.systemRole === 'ADMIN' || u.email.toLowerCase() === adminEmail);
-    if (!hasAdmin) {
-      const adminHash = bcrypt.hashSync(adminPassword, 10);
-      const now = new Date().toISOString();
-      const adminUser: MockUser = {
+  private ensureDefaultRoleUsersInLoadedState() {
+    const now = new Date().toISOString();
+    const defaultRoles = [
+      {
         id: 'usr_admin_bootstrap',
-        email: adminEmail,
-        name: 'System Administrator (SecOps)',
-        passwordHash: adminHash,
-        systemRole: 'ADMIN',
-        isActive: true,
-        emailVerified: now,
-        twoFactorEnabled: false,
-        failedLoginCount: 0,
-        lockedUntil: null,
-        tokenVersion: 1,
-        createdAt: now,
-      };
-      this.users.unshift(adminUser);
+        email: 'admin@sentinelrecon.local',
+        altEmail: 'admin@reconflow.local',
+        name: 'Sarah Connor (Security Admin)',
+        systemRole: 'ADMIN' as const,
+        passwords: ['AdminPassword2026!', 'Admin@Sentinel2026!', 'Admin@ReconFlow2026!'],
+      },
+      {
+        id: 'usr_analyst_bootstrap',
+        email: 'analyst@sentinelrecon.local',
+        altEmail: 'analyst@reconflow.local',
+        name: 'Marcus Vance (Lead Analyst)',
+        systemRole: 'ANALYST' as const,
+        passwords: ['AnalystPassword2026!', 'Analyst@Sentinel2026!'],
+      },
+      {
+        id: 'usr_auditor_bootstrap',
+        email: 'auditor@sentinelrecon.local',
+        altEmail: 'auditor@reconflow.local',
+        name: 'Elena Rostova (Compliance Auditor)',
+        systemRole: 'AUDITOR' as const,
+        passwords: ['AuditorPassword2026!', 'Auditor@Sentinel2026!'],
+      },
+      {
+        id: 'usr_viewer_bootstrap',
+        email: 'viewer@sentinelrecon.local',
+        altEmail: 'viewer@reconflow.local',
+        name: 'David Chen (Security Viewer)',
+        systemRole: 'VIEWER' as const,
+        passwords: ['ViewerPassword2026!', 'Viewer@Sentinel2026!'],
+      },
+    ];
+
+    for (const roleDef of defaultRoles) {
+      let existing = this.users.find(
+        (u) =>
+          u.systemRole === roleDef.systemRole ||
+          u.email.toLowerCase() === roleDef.email.toLowerCase() ||
+          u.email.toLowerCase() === roleDef.altEmail.toLowerCase()
+      );
+
+      if (!existing) {
+        const passwordHash = bcrypt.hashSync(roleDef.passwords[0], 10);
+        existing = {
+          id: roleDef.id,
+          email: roleDef.email,
+          name: roleDef.name,
+          passwordHash,
+          systemRole: roleDef.systemRole,
+          isActive: true,
+          emailVerified: now,
+          twoFactorEnabled: false,
+          failedLoginCount: 0,
+          lockedUntil: null,
+          tokenVersion: 1,
+          createdAt: now,
+        };
+        this.users.push(existing);
+      } else {
+        // Ensure user is active and has valid role
+        existing.isActive = true;
+        existing.lockedUntil = null;
+        existing.failedLoginCount = 0;
+      }
     }
   }
 
   private seed() {
-    const adminEmail = (process.env.ADMIN_EMAIL || 'admin@reconflow.local').toLowerCase().trim();
-    const adminPassword = process.env.ADMIN_PASSWORD || 'Admin@ReconFlow2026!';
-    const adminHash = bcrypt.hashSync(adminPassword, 10);
     const now = new Date().toISOString();
+    const adminHash = bcrypt.hashSync('AdminPassword2026!', 10);
+    const analystHash = bcrypt.hashSync('AnalystPassword2026!', 10);
+    const auditorHash = bcrypt.hashSync('AuditorPassword2026!', 10);
+    const viewerHash = bcrypt.hashSync('ViewerPassword2026!', 10);
 
     const adminUser: MockUser = {
       id: 'usr_admin_bootstrap',
-      email: adminEmail,
-      name: 'System Administrator (SecOps)',
+      email: 'admin@sentinelrecon.local',
+      name: 'Sarah Connor (Security Admin)',
       passwordHash: adminHash,
       systemRole: 'ADMIN',
       isActive: true,
@@ -363,10 +410,57 @@ class MemoryDataStore {
       createdAt: now,
     };
 
-    const uAdmin = adminUser;
-    const uAnalyst = adminUser;
+    const analystUser: MockUser = {
+      id: 'usr_analyst_bootstrap',
+      email: 'analyst@sentinelrecon.local',
+      name: 'Marcus Vance (Lead Analyst)',
+      passwordHash: analystHash,
+      systemRole: 'ANALYST',
+      isActive: true,
+      emailVerified: now,
+      twoFactorEnabled: false,
+      failedLoginCount: 0,
+      lockedUntil: null,
+      tokenVersion: 1,
+      createdAt: now,
+    };
 
-    this.users = [adminUser];
+    const auditorUser: MockUser = {
+      id: 'usr_auditor_bootstrap',
+      email: 'auditor@sentinelrecon.local',
+      name: 'Elena Rostova (Compliance Auditor)',
+      passwordHash: auditorHash,
+      systemRole: 'AUDITOR',
+      isActive: true,
+      emailVerified: now,
+      twoFactorEnabled: false,
+      failedLoginCount: 0,
+      lockedUntil: null,
+      tokenVersion: 1,
+      createdAt: now,
+    };
+
+    const viewerUser: MockUser = {
+      id: 'usr_viewer_bootstrap',
+      email: 'viewer@sentinelrecon.local',
+      name: 'David Chen (Security Viewer)',
+      passwordHash: viewerHash,
+      systemRole: 'VIEWER',
+      isActive: true,
+      emailVerified: now,
+      twoFactorEnabled: false,
+      failedLoginCount: 0,
+      lockedUntil: null,
+      tokenVersion: 1,
+      createdAt: now,
+    };
+
+    this.users = [adminUser, analystUser, auditorUser, viewerUser];
+
+    const uAdmin = adminUser;
+    const uAnalyst = analystUser;
+    const uAuditor = auditorUser;
+    const uViewer = viewerUser;
 
     const p1: MockProgram = {
       id: 'prog_apex_01',

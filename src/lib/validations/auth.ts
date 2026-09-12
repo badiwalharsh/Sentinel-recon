@@ -22,7 +22,7 @@ export const registerSchema = z
   });
 
 export const loginSchema = z.object({
-  email: z.string().email('Invalid email address').toLowerCase().trim(),
+  email: z.string().min(1, 'Email or username is required').trim(),
   password: z.string().min(1, 'Password is required'),
 });
 

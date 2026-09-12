@@ -7,11 +7,8 @@ import { Lock, Mail, User, AlertCircle, ShieldCheck, Check, ArrowRight, Globe, K
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { SignUp } from '@clerk/nextjs';
-
 export default function RegisterPage() {
   const router = useRouter();
-  const [authMode, setAuthMode] = useState<'direct' | 'third_party'>('direct');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -116,54 +113,17 @@ export default function RegisterPage() {
           New Operator Registration & Role Initialization (Default: Analyst)
         </CardDescription>
 
-        {/* Auth Mode Switcher */}
-        <div className="flex items-center justify-center gap-1.5 pt-3 p-1 bg-slate-950/60 rounded-lg border border-slate-800 text-xs font-mono">
-          <button
-            type="button"
-            onClick={() => setAuthMode('direct')}
-            className={`flex-1 py-1.5 px-3 rounded text-xs transition-colors flex items-center justify-center gap-1.5 ${
-              authMode === 'direct'
-                ? 'bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 font-semibold'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <KeyRound className="w-3.5 h-3.5" />
-            Standard Registration
-          </button>
-          <button
-            type="button"
-            onClick={() => setAuthMode('third_party')}
-            className={`flex-1 py-1.5 px-3 rounded text-xs transition-colors flex items-center justify-center gap-1.5 ${
-              authMode === 'third_party'
-                ? 'bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 font-semibold'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Globe className="w-3.5 h-3.5" />
-            Clerk SSO Onboarding
-          </button>
-        </div>
       </CardHeader>
 
       <CardContent className="space-y-4 pt-3">
-        {authMode === 'third_party' ? (
-          <div className="flex justify-center py-2">
-            <SignUp
-              routing="hash"
-              fallbackRedirectUrl="/dashboard"
-              signInUrl="/login"
-            />
+        {error && (
+          <div className="p-3 rounded-lg bg-rose-950/60 border border-rose-500/50 text-rose-300 text-xs font-mono flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+            <span>{error}</span>
           </div>
-        ) : (
-          <>
-            {error && (
-              <div className="p-3 rounded-lg bg-rose-950/60 border border-rose-500/50 text-rose-300 text-xs font-mono flex items-start gap-2.5">
-                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-                <span>{error}</span>
-              </div>
-            )}
+        )}
 
-            <form onSubmit={handleRegister} noValidate className="space-y-3.5">
+        <form onSubmit={handleRegister} noValidate className="space-y-3.5">
           <Input
             label="OPERATOR NAME"
             type="text"
@@ -179,7 +139,7 @@ export default function RegisterPage() {
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="analyst@reconflow.local"
+            placeholder="analyst@sentinelrecon.local"
             leftIcon={<Mail className="w-4 h-4" />}
             required
           />
@@ -250,7 +210,7 @@ export default function RegisterPage() {
           </div>
 
           <Button type="submit" variant="primary" loading={loading} className="w-full font-mono text-xs py-2.5 flex items-center justify-center gap-2">
-            <span>Register & Proceed to Verification</span>
+            <span>Register & Initialize Operator</span>
             <ArrowRight className="w-4 h-4" />
           </Button>
         </form>
@@ -261,9 +221,7 @@ export default function RegisterPage() {
             Sign In Here
           </Link>
         </div>
-      </>
-    )}
-  </CardContent>
-</Card>
+      </CardContent>
+    </Card>
   );
 }

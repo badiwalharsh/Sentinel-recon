@@ -29,24 +29,18 @@ async function verifyTokenEdge(token: string): Promise<SessionClaims | null> {
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  const clerkSession = request.cookies.get('__session')?.value;
   const sessionCookie = request.cookies.get(SESSION_COOKIE_NAME)?.value;
 
   // Auto-redirect authenticated operators away from auth gateways
   const isAuthPage = pathname === '/login' || pathname === '/register';
-  if (isAuthPage && (clerkSession || sessionCookie)) {
-    if (clerkSession) {
-      return NextResponse.redirect(new URL('/dashboard', request.url));
-    }
-    if (sessionCookie) {
-      const claims = await verifyTokenEdge(sessionCookie);
-      if (claims && claims.userId) {
-        const callbackUrl = request.nextUrl.searchParams.get('callbackUrl');
-        if (callbackUrl && callbackUrl.startsWith('/') && !callbackUrl.startsWith('//') && callbackUrl !== '/login') {
-          return NextResponse.redirect(new URL(callbackUrl, request.url));
-        }
-        return NextResponse.redirect(new URL('/dashboard', request.url));
+  if (isAuthPage && sessionCookie) {
+    const claims = await verifyTokenEdge(sessionCookie);
+    if (claims && claims.userId) {
+      const callbackUrl = request.nextUrl.searchParams.get('callbackUrl');
+      if (callbackUrl && callbackUrl.startsWith('/') && !callbackUrl.startsWith('//') && callbackUrl !== '/login') {
+        return NextResponse.redirect(new URL(callbackUrl, request.url));
       }
+      return NextResponse.redirect(new URL('/dashboard', request.url));
     }
   }
 
@@ -55,7 +49,7 @@ export async function proxy(request: NextRequest) {
   const isAdminRoute = pathname.startsWith('/admin') || pathname.startsWith('/api/v1/admin');
 
   if (isProtectedRoute || isAdminRoute) {
-    if (!clerkSession && !sessionCookie) {
+    if (!sessionCookie) {
       if (pathname.startsWith('/api/')) {
         return NextResponse.json({ error: 'Unauthorized: Authentication required' }, { status: 401 });
       }
@@ -64,26 +58,24 @@ export async function proxy(request: NextRequest) {
       return NextResponse.redirect(loginUrl);
     }
 
-    if (sessionCookie && !clerkSession) {
-      const claims = await verifyTokenEdge(sessionCookie);
-      if (!claims || !claims.userId) {
-        if (pathname.startsWith('/api/')) {
-          return NextResponse.json({ error: 'Unauthorized: Invalid or expired session' }, { status: 401 });
-        }
-        const loginUrl = new URL('/login', request.url);
-        loginUrl.searchParams.set('callbackUrl', pathname);
-        const response = NextResponse.redirect(loginUrl);
-        response.cookies.delete(SESSION_COOKIE_NAME);
-        return response;
+    const claims = await verifyTokenEdge(sessionCookie);
+    if (!claims || !claims.userId) {
+      if (pathname.startsWith('/api/')) {
+        return NextResponse.json({ error: 'Unauthorized: Invalid or expired session' }, { status: 401 });
       }
+      const loginUrl = new URL('/login', request.url);
+      loginUrl.searchParams.set('callbackUrl', pathname);
+      const response = NextResponse.redirect(loginUrl);
+      response.cookies.delete(SESSION_COOKIE_NAME);
+      return response;
+    }
 
-      // Role-based authorization for admin routes
-      if (isAdminRoute && claims.systemRole !== 'ADMIN') {
-        if (pathname.startsWith('/api/')) {
-          return NextResponse.json({ error: 'Forbidden: Administrator privileges required' }, { status: 403 });
-        }
-        return NextResponse.redirect(new URL('/programs', request.url));
+    // Role-based authorization for admin routes
+    if (isAdminRoute && claims.systemRole !== 'ADMIN') {
+      if (pathname.startsWith('/api/')) {
+        return NextResponse.json({ error: 'Forbidden: Administrator privileges required' }, { status: 403 });
       }
+      return NextResponse.redirect(new URL('/programs', request.url));
     }
   }
 
