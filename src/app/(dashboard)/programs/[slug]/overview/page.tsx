@@ -27,7 +27,38 @@ export const dynamic = 'force-dynamic';
 
 export default async function ProgramOverviewPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const program = dbStore.programs.find((p) => p.slug === slug || p.id === slug);
+  
+  // 1. Check Prisma
+  let program: any = null;
+  try {
+    const { prisma } = await import('@/lib/prisma');
+    const dbProgram = await prisma.program.findFirst({
+      where: {
+        OR: [{ slug }, { id: slug }],
+      },
+    });
+    if (dbProgram) {
+      program = {
+        id: dbProgram.id,
+        name: dbProgram.name,
+        slug: dbProgram.slug,
+        description: dbProgram.description || '',
+        scopeRules: dbProgram.scopeRules,
+        isArchived: dbProgram.isArchived,
+        createdById: dbProgram.createdById,
+        createdAt: dbProgram.createdAt.toISOString(),
+      };
+    }
+  } catch {}
+
+  // 2. Fallback to dbStore
+  if (!program) {
+    if (typeof dbStore.sync === 'function') {
+      dbStore.sync();
+    }
+    program = dbStore.programs.find((p) => p.slug === slug || p.id === slug);
+  }
+
   if (!program) notFound();
 
   const targets = dbStore.targets.filter((t) => t.programId === program.id);
