@@ -84,6 +84,13 @@ export default function AdminUsersPage() {
 
   useEffect(() => {
     fetchUsers();
+
+    // Auto-refresh user list every 12 seconds for near real-time state visibility
+    const interval = setInterval(() => {
+      fetchUsers();
+    }, 12000);
+
+    return () => clearInterval(interval);
   }, []);
 
   const handleUpdateRole = async (userId: string, newRole: string) => {

@@ -1,20 +1,26 @@
-# ReconFlow OSINT Workbench
+# Sentinel Recon OSINT Workbench
 
-**ReconFlow OSINT Workbench** is a centralized ethical-hacker reconnaissance platform for authorized targets. It unites asset discovery, passive OSINT collection, structured recon workflows, vulnerability findings management, target intelligence dork searching, Cytoscape relationship graphing, and executive reporting into a unified, security-first web application.
+**Sentinel Recon** is a centralized ethical-hacker reconnaissance workbench and attack surface management platform for authorized targets. It unites asset discovery, passive OSINT collection, structured recon workflows, vulnerability findings management, target intelligence dork searching, Cytoscape relationship graphing, and executive reporting into a unified, security-first web application.
 
 ---
 
 ## 🔒 Non-Negotiable Security Principles
 
-- **Zero Demo Accounts**: There are no hardcoded demo accounts, pre-fill buttons, or quick-login toolbars anywhere in the application.
-- **Mandatory Registration & Email Verification**: All new security operators register via `/register` and verify their identity with a token via `/verify-email`.
-- **Default Analyst Role**: All self-registered operator accounts default to the `ANALYST` role upon email verification.
+- **Zero Demo Accounts**: There are no hardcoded demo accounts, pre-fill buttons, or quick-login toolbars anywhere in the application. All operators must register or be provisioned.
 - **Environment-Driven Initial Administrator Bootstrap**: On startup/first run, if no `ADMIN` account exists, the platform automatically bootstraps an initial administrator account using environment variables:
-  - `ADMIN_EMAIL` (default: `admin@reconflow.local`)
-  - `ADMIN_PASSWORD` (default: `Admin@ReconFlow2026!`)
+  - `ADMIN_EMAIL` (e.g., `admin@sentinelrecon.com`)
+  - `ADMIN_PASSWORD` (e.g., `Admin@SentinelRecon2026!`)
+- **Default Analyst Role**: All self-registered operator accounts default to the `ANALYST` role with immediate access to initialize and manage authorized programs.
 - **Append-Only Immutable Audit Ledger**: Every operator authentication, role elevation, target scoping modification, OSINT ingestion, and intelligence search is recorded in an immutable ledger with client IP, timestamp, and JSON metadata. No deletion or mutation endpoints exist.
 - **Program-Level Tenant Isolation**: Multi-tenant RBAC strictly prevents cross-program queries, IDOR access on evidence files, or unauthorized asset mutations.
 - **Automated Secret Masking**: Credentials, API tokens, passwords, and private keys in reports and exports are automatically redacted (`sec••••••••[REDACTED]`).
+
+---
+
+## ☁️ Cloud Services & Production Setup
+
+For complete step-by-step instructions on setting up **Managed PostgreSQL (Neon / Supabase)**, **Resend Email API**, and **Vercel Deployment**, please refer to:
+👉 **[SETUP_SERVICES.md](./SETUP_SERVICES.md)**
 
 ---
 

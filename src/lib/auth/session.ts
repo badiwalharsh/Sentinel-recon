@@ -22,12 +22,6 @@ export function getSessionCookieOptions(req?: Request) {
 }
 
 export async function getCurrentUser(): Promise<TokenPayload | null> {
-  // Ensure store is synced across serverless invocations
-  if (typeof dbStore.sync === 'function') {
-    dbStore.sync();
-  }
-
-  // Check JWT session cookie
   try {
     const cookieStore = await cookies();
     const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
@@ -35,6 +29,45 @@ export async function getCurrentUser(): Promise<TokenPayload | null> {
 
     const payload = await verifySessionToken(token);
     if (!payload || !payload.userId) return null;
+
+    // Check Prisma first if available
+    try {
+      const { prisma } = await import('../prisma');
+      const normalizedEmail = (payload.email || '').toLowerCase().trim();
+      const dbUser = await prisma.user.findFirst({
+        where: {
+          OR: [
+            { id: payload.userId },
+            ...(normalizedEmail ? [{ email: normalizedEmail }] : []),
+          ],
+        },
+      });
+
+      if (dbUser) {
+        if (!dbUser.isActive) return null;
+        if (dbUser.lockedUntil && new Date(dbUser.lockedUntil) > new Date()) return null;
+
+        const tokenVer = payload.tokenVersion ?? 1;
+        if (dbUser.tokenVersion && tokenVer !== dbUser.tokenVersion) {
+          return null;
+        }
+
+        return {
+          userId: dbUser.id,
+          email: dbUser.email,
+          name: dbUser.name,
+          systemRole: dbUser.systemRole as TokenPayload['systemRole'],
+          tokenVersion: dbUser.tokenVersion,
+        };
+      }
+    } catch {
+      // Prisma offline, proceed with dbStore
+    }
+
+    // Ensure store is synced across serverless invocations
+    if (typeof dbStore.sync === 'function') {
+      dbStore.sync();
+    }
 
     // Verify user is in datastore
     const user = dbStore.users.find(

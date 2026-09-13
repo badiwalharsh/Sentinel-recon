@@ -127,19 +127,24 @@ enum AuditAction {
 // -------------------------------------------------------------
 
 model User {
-  id               String       @id @default(cuid())
-  email            String       @unique
-  name             String
-  passwordHash     String
-  systemRole       SystemRole   @default(ANALYST)
-  isActive         Boolean      @default(true)
-  twoFactorEnabled Boolean      @default(false)
-  twoFactorSecret  String?
-  lastLoginAt      DateTime?
-  failedLoginCount Int          @default(0)
-  lockedUntil      DateTime?
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
+  id                        String       @id @default(cuid())
+  email                     String       @unique
+  name                      String
+  passwordHash              String
+  systemRole                SystemRole   @default(ANALYST)
+  isActive                  Boolean      @default(true)
+  emailVerified             DateTime?
+  verificationToken         String?
+  resetPasswordToken        String?
+  resetPasswordTokenExpires DateTime?
+  tokenVersion              Int          @default(1)
+  twoFactorEnabled          Boolean      @default(false)
+  twoFactorSecret           String?
+  lastLoginAt               DateTime?
+  failedLoginCount          Int          @default(0)
+  lockedUntil               DateTime?
+  createdAt                 DateTime     @default(now())
+  updatedAt                 DateTime     @updatedAt
 
   memberships      ProgramMembership[]
   createdPrograms  Program[]            @relation("CreatedBy")
@@ -169,6 +174,7 @@ model Program {
   slug        String              @unique
   description String?
   scopeRules  String              @default("") // In-scope / Out-of-scope policies
+  isActive    Boolean             @default(true)
   isArchived  Boolean             @default(false)
   createdById String
   createdBy   User                @relation("CreatedBy", fields: [createdById], references: [id])
@@ -475,4 +481,31 @@ model AuditLog {
   @@index([userId])
   @@index([action])
   @@index([timestamp])
+}
+
+// -------------------------------------------------------------
+// BACKGROUND JOBS & ASYNC TASK QUEUE
+// -------------------------------------------------------------
+
+enum JobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model Job {
+  id          String    @id @default(cuid())
+  type        String    // e.g., 'OSINT_SCAN', 'INTELLIGENCE_QUERY', 'PORT_AUDIT'
+  status      JobStatus @default(PENDING)
+  payload     Json
+  result      Json?
+  error       String?
+  programId   String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([status])
+  @@index([type])
+  @@index([programId])
 }

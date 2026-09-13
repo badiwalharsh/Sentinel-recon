@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth/session';
 import { dbStore, MockUser } from '@/lib/db-store';
+import { prisma } from '@/lib/prisma';
 import { updateRoleSchema, adminCreateUserSchema } from '@/lib/validations/auth';
 import { adminAssignProgramsSchema } from '@/lib/validations/program';
 import { createAuditLog } from '@/lib/audit';
@@ -12,42 +13,101 @@ export async function GET() {
     return NextResponse.json({ error: 'Admin privileges required' }, { status: 403 });
   }
 
-  const allPrograms = dbStore.programs.map((p) => ({
+  // Load programs from DB / store
+  let allPrograms = dbStore.programs.map((p) => ({
     id: p.id,
     name: p.name,
     slug: p.slug,
     description: p.description,
   }));
 
-  const users = dbStore.users.map((u) => {
-    const userPrograms = dbStore.programs
-      .filter((p) => p.memberships.some((m) => m.userId === u.id))
-      .map((p) => {
-        const m = p.memberships.find((mem) => mem.userId === u.id);
-        return {
-          id: p.id,
-          name: p.name,
-          slug: p.slug,
-          role: m?.role || 'ANALYST',
-        };
-      });
+  try {
+    const dbPrograms = await prisma.program.findMany({
+      select: { id: true, name: true, slug: true, description: true },
+    });
+    if (dbPrograms && dbPrograms.length > 0) {
+      allPrograms = dbPrograms.map((p) => ({
+        id: p.id,
+        name: p.name,
+        slug: p.slug,
+        description: p.description || '',
+      }));
+    }
+  } catch {}
 
-    return {
-      id: u.id,
-      name: u.name,
-      email: u.email,
-      systemRole: u.systemRole,
-      isActive: u.isActive,
-      twoFactorEnabled: u.twoFactorEnabled,
-      failedLoginCount: u.failedLoginCount,
-      lockedUntil: u.lockedUntil,
-      createdAt: u.createdAt,
-      programs: userPrograms,
-      programsCount: userPrograms.length,
-    };
-  });
+  // 1. Try querying users from Prisma with memberships
+  let usersList: any[] = [];
+  try {
+    const dbUsers = await prisma.user.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: {
+        memberships: {
+          include: {
+            program: {
+              select: { id: true, name: true, slug: true },
+            },
+          },
+        },
+      },
+    });
 
-  return NextResponse.json({ users, allPrograms });
+    if (dbUsers && dbUsers.length > 0) {
+      usersList = dbUsers.map((u) => ({
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        systemRole: u.systemRole,
+        isActive: u.isActive,
+        twoFactorEnabled: u.twoFactorEnabled,
+        failedLoginCount: u.failedLoginCount,
+        lockedUntil: u.lockedUntil?.toISOString() || null,
+        createdAt: u.createdAt.toISOString(),
+        programs: (u.memberships || []).map((m) => ({
+          id: m.program.id,
+          name: m.program.name,
+          slug: m.program.slug,
+          role: m.role,
+        })),
+        programsCount: (u.memberships || []).length,
+      }));
+    }
+  } catch {}
+
+  // 2. If Prisma is empty or offline, fallback to dbStore
+  if (usersList.length === 0) {
+    if (typeof dbStore.sync === 'function') {
+      dbStore.sync();
+    }
+    usersList = dbStore.users.map((u) => {
+      const userPrograms = dbStore.programs
+        .filter((p) => (p.memberships || []).some((m) => m.userId === u.id))
+        .map((p) => {
+          const m = (p.memberships || []).find((mem) => mem.userId === u.id);
+          return {
+            id: p.id,
+            name: p.name,
+            slug: p.slug,
+            role: m?.role || 'ANALYST',
+          };
+        });
+
+      return {
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        systemRole: u.systemRole,
+        isActive: u.isActive,
+        twoFactorEnabled: u.twoFactorEnabled,
+        failedLoginCount: u.failedLoginCount,
+        lockedUntil: u.lockedUntil,
+        createdAt: u.createdAt,
+        programs: userPrograms,
+        programsCount: userPrograms.length,
+      };
+    });
+  }
+
+  return NextResponse.json({ users: usersList, allPrograms });
 }
 
 export async function POST(req: Request) {
@@ -68,9 +128,19 @@ export async function POST(req: Request) {
     }
 
     const { name, email, password, systemRole } = parsed.data;
+    const normalizedEmail = email.toLowerCase().trim();
 
     // Check if email already exists
-    const existing = dbStore.users.find((u) => u.email.toLowerCase() === email.toLowerCase());
+    let existing = dbStore.users.some((u) => u.email.toLowerCase() === normalizedEmail);
+    if (!existing) {
+      try {
+        const dbExisting = await prisma.user.findUnique({
+          where: { email: normalizedEmail },
+        });
+        if (dbExisting) existing = true;
+      } catch {}
+    }
+
     if (existing) {
       return NextResponse.json(
         { error: `A user with email / login ID "${email}" already exists.` },
@@ -79,25 +149,45 @@ export async function POST(req: Request) {
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
-    const now = new Date().toISOString();
+    const now = new Date();
     const newUserId = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+    // Create in Prisma
+    let dbCreated = false;
+    try {
+      await prisma.user.create({
+        data: {
+          id: newUserId,
+          name: name.trim(),
+          email: normalizedEmail,
+          passwordHash,
+          systemRole,
+          isActive: true,
+          emailVerified: now,
+          tokenVersion: 1,
+        },
+      });
+      dbCreated = true;
+    } catch (e) {
+      console.warn('[Admin Create User] Prisma write fallback:', e);
+    }
 
     const newUser: MockUser = {
       id: newUserId,
       name: name.trim(),
-      email: email.toLowerCase().trim(),
+      email: normalizedEmail,
       passwordHash,
       systemRole,
       isActive: true,
-      emailVerified: now,
+      emailVerified: now.toISOString(),
       twoFactorEnabled: false,
       failedLoginCount: 0,
       lockedUntil: null,
       tokenVersion: 1,
-      createdAt: now,
+      createdAt: now.toISOString(),
     };
 
-    // Add user to database store
+    // Add user to memory store
     dbStore.users.unshift(newUser);
 
     // Auto-enroll user into initial active programs
@@ -108,10 +198,21 @@ export async function POST(req: Request) {
           userId: newUser.id,
           role: systemRole === 'ADMIN' ? 'LEAD_ANALYST' : systemRole === 'VIEWER' ? 'VIEWER' : systemRole === 'AUDITOR' ? 'AUDITOR' : 'ANALYST',
         });
+        if (dbCreated) {
+          try {
+            await prisma.programMembership.create({
+              data: {
+                programId: prog.id,
+                userId: newUser.id,
+                role: systemRole === 'ADMIN' ? 'LEAD_ANALYST' : systemRole === 'VIEWER' ? 'VIEWER' : systemRole === 'AUDITOR' ? 'AUDITOR' : 'ANALYST',
+              },
+            }).catch(() => {});
+          } catch {}
+        }
       }
     }
 
-    // Persist immediately to storage
+    // Persist memory store
     dbStore.persist();
 
     await createAuditLog({
@@ -183,7 +284,23 @@ export async function PUT(req: Request) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    // Update memberships across all programs
+    // Update memberships in Prisma
+    try {
+      await prisma.programMembership.deleteMany({
+        where: { userId },
+      });
+      if (assignments.length > 0) {
+        await prisma.programMembership.createMany({
+          data: assignments.map((a) => ({
+            programId: a.programId,
+            userId,
+            role: a.role as any,
+          })),
+        });
+      }
+    } catch {}
+
+    // Update memberships across memory store
     for (const prog of dbStore.programs) {
       const assignment = assignments.find((a) => a.programId === prog.id);
       const existingMemIndex = prog.memberships.findIndex((m) => m.userId === targetUser.id);
@@ -199,14 +316,12 @@ export async function PUT(req: Request) {
           });
         }
       } else {
-        // Unassign user from program
         if (existingMemIndex >= 0) {
           prog.memberships.splice(existingMemIndex, 1);
         }
       }
     }
 
-    // Persist immediately to storage
     dbStore.persist();
 
     await createAuditLog({
@@ -284,7 +399,18 @@ export async function PATCH(req: Request) {
     // Invalidate existing sessions for the target user immediately
     targetUser.tokenVersion = (targetUser.tokenVersion || 1) + 1;
 
-    // Persist immediately to storage
+    // Update in Prisma
+    try {
+      await prisma.user.update({
+        where: { id: userId },
+        data: {
+          systemRole: systemRole as any,
+          isActive: typeof isActive === 'boolean' ? isActive : undefined,
+          tokenVersion: targetUser.tokenVersion,
+        },
+      });
+    } catch {}
+
     dbStore.persist();
 
     await createAuditLog({
@@ -301,6 +427,7 @@ export async function PATCH(req: Request) {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
+
 
 
 

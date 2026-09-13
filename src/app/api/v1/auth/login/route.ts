@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { dbStore } from '@/lib/db-store';
+import { prisma } from '@/lib/prisma';
 import { signSessionToken } from '@/lib/auth/jwt';
 import { SESSION_COOKIE_NAME, getSessionCookieOptions } from '@/lib/auth/session';
 import { loginSchema } from '@/lib/validations/auth';
@@ -10,7 +11,7 @@ import bcrypt from 'bcryptjs';
 export async function POST(req: Request) {
   try {
     const ip = getClientIp(req);
-    const rateCheck = checkRateLimit(`auth:login:${ip}`, 5, 60);
+    const rateCheck = checkRateLimit(`auth:login:${ip}`, 10, 60);
     if (!rateCheck.success) {
       return NextResponse.json(
         {
@@ -36,37 +37,51 @@ export async function POST(req: Request) {
       );
     }
 
-    const rawIdentifier = parsed.data.email.toLowerCase().trim();
+    const normalizedEmail = parsed.data.email.toLowerCase().trim();
     const password = parsed.data.password;
 
-    // Ensure database store is fresh
-    if (typeof dbStore.sync === 'function') {
-      dbStore.sync();
+    // 1. Query user from Prisma or dbStore
+    let user: any = null;
+    let isDbUser = false;
+
+    try {
+      const dbUser = await prisma.user.findUnique({
+        where: { email: normalizedEmail },
+      });
+      if (dbUser) {
+        user = {
+          id: dbUser.id,
+          name: dbUser.name,
+          email: dbUser.email,
+          passwordHash: dbUser.passwordHash,
+          systemRole: dbUser.systemRole,
+          isActive: dbUser.isActive,
+          failedLoginCount: dbUser.failedLoginCount,
+          lockedUntil: dbUser.lockedUntil?.toISOString() || null,
+          tokenVersion: dbUser.tokenVersion || 1,
+        };
+        isDbUser = true;
+      }
+    } catch {
+      // Prisma offline, proceed with memory store
     }
 
-    // Check user in store by email or role/username alias
-    const user = dbStore.users.find((u) => {
-      const uEmail = u.email.toLowerCase();
-      const uPrefix = uEmail.split('@')[0];
-      return (
-        uEmail === rawIdentifier ||
-        uPrefix === rawIdentifier ||
-        u.systemRole.toLowerCase() === rawIdentifier ||
-        (rawIdentifier === 'admin' && (u.systemRole === 'ADMIN' || uEmail.includes('admin'))) ||
-        (rawIdentifier === 'analyst' && (u.systemRole === 'ANALYST' || uEmail.includes('analyst'))) ||
-        (rawIdentifier === 'auditor' && (u.systemRole === 'AUDITOR' || uEmail.includes('auditor'))) ||
-        (rawIdentifier === 'viewer' && (u.systemRole === 'VIEWER' || uEmail.includes('viewer')))
-      );
-    });
+    if (!user) {
+      if (typeof dbStore.sync === 'function') {
+        dbStore.sync();
+      }
+      user = dbStore.users.find((u) => u.email.toLowerCase() === normalizedEmail);
+    }
 
+    // Generic error response to prevent user enumeration
     if (!user) {
       await createAuditLog({
         action: 'SECURITY_ALERT',
         entityType: 'User',
-        details: { reason: 'Login attempt for non-existent user', identifier: rawIdentifier },
+        details: { reason: 'Login attempt for non-existent user', email: normalizedEmail },
         req,
       });
-      return NextResponse.json({ error: 'Invalid username/email or password' }, { status: 401 });
+      return NextResponse.json({ error: 'Invalid email or password' }, { status: 401 });
     }
 
     if (!user.isActive) {
@@ -80,7 +95,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // Verify password (with fallback check for default seeded role passwords)
+    // 2. Verify password
     let isMatch = false;
     try {
       if (user.passwordHash) {
@@ -90,26 +105,12 @@ export async function POST(req: Request) {
       isMatch = false;
     }
 
-    // Fallback known role passwords for demo/testing resilience
     if (!isMatch) {
-      const validRolePasswords: Record<string, string[]> = {
-        ADMIN: ['AdminPassword2026!', 'Admin@Sentinel2026!', 'Admin@ReconFlow2026!'],
-        ANALYST: ['AnalystPassword2026!', 'Analyst@Sentinel2026!', 'Analyst@ReconFlow2026!'],
-        AUDITOR: ['AuditorPassword2026!', 'Auditor@Sentinel2026!', 'Auditor@ReconFlow2026!'],
-        VIEWER: ['ViewerPassword2026!', 'Viewer@Sentinel2026!', 'Viewer@ReconFlow2026!'],
-      };
-      const allowed = validRolePasswords[user.systemRole] || [];
-      if (allowed.includes(password)) {
-        isMatch = true;
-        // Update user passwordHash to stay in sync
-        user.passwordHash = bcrypt.hashSync(password, 10);
-      }
-    }
+      const newFailedCount = (user.failedLoginCount || 0) + 1;
+      let newLockedUntil: string | null = null;
 
-    if (!isMatch) {
-      user.failedLoginCount += 1;
-      if (user.failedLoginCount >= 5) {
-        user.lockedUntil = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+      if (newFailedCount >= 5) {
+        newLockedUntil = new Date(Date.now() + 15 * 60 * 1000).toISOString();
         await createAuditLog({
           action: 'SECURITY_ALERT',
           entityType: 'User',
@@ -125,30 +126,57 @@ export async function POST(req: Request) {
         entityType: 'User',
         entityId: user.id,
         userId: user.id,
-        details: { reason: 'Invalid password entered', failedAttempts: user.failedLoginCount },
+        details: { reason: 'Invalid password entered', failedAttempts: newFailedCount },
         req,
       });
 
+      // Update store & DB
+      user.failedLoginCount = newFailedCount;
+      user.lockedUntil = newLockedUntil;
+      const memUser = dbStore.users.find((u) => u.id === user.id);
+      if (memUser) {
+        memUser.failedLoginCount = newFailedCount;
+        memUser.lockedUntil = newLockedUntil;
+      }
       dbStore.persist();
+
+      if (isDbUser) {
+        try {
+          await prisma.user.update({
+            where: { id: user.id },
+            data: {
+              failedLoginCount: newFailedCount,
+              lockedUntil: newLockedUntil ? new Date(newLockedUntil) : null,
+            },
+          }).catch(() => {});
+        } catch {}
+      }
+
       return NextResponse.json({ error: 'Invalid email or password' }, { status: 401 });
     }
 
-    // Reset failed count
+    // 3. Reset failed login counter on success
     user.failedLoginCount = 0;
     user.lockedUntil = null;
-
-    // Ensure user has membership in programs so dashboard displays data
-    for (const prog of dbStore.programs) {
-      if (!prog.memberships.some((m) => m.userId === user.id)) {
-        prog.memberships.push({
-          id: `m_${user.id}_${prog.id}`,
-          userId: user.id,
-          role: user.systemRole === 'ADMIN' ? 'LEAD_ANALYST' : user.systemRole === 'VIEWER' ? 'VIEWER' : user.systemRole === 'AUDITOR' ? 'AUDITOR' : 'ANALYST',
-        });
-      }
+    const memUser = dbStore.users.find((u) => u.id === user.id);
+    if (memUser) {
+      memUser.failedLoginCount = 0;
+      memUser.lockedUntil = null;
     }
-
     dbStore.persist();
+
+    if (isDbUser) {
+      try {
+        await prisma.user.update({
+          where: { id: user.id },
+          data: {
+            failedLoginCount: 0,
+            lockedUntil: null,
+            lastLoginAt: new Date(),
+          },
+        }).catch(() => {});
+      } catch {}
+    }
 
     // Sign JWT
     const token = await signSessionToken({
@@ -179,7 +207,7 @@ export async function POST(req: Request) {
       },
     });
 
-    // Set secure cookie with lax SameSite for seamless immediate redirection
+    // Set secure cookie
     const cookieOptions = getSessionCookieOptions(req);
     response.cookies.set(SESSION_COOKIE_NAME, token, cookieOptions);
 
@@ -188,5 +216,5 @@ export async function POST(req: Request) {
     console.error('Login error:', err);
     return NextResponse.json({ error: 'Authentication internal server error' }, { status: 500 });
   }
-
 }
+
