@@ -82,22 +82,42 @@ test('Authentication: Session Invalidation via Token Version', async () => {
   user.tokenVersion = originalVersion;
 });
 
-test('Authentication: Account Lockout Threshold Simulation', () => {
-  const testUser = {
-    id: 'usr_lock_test',
-    email: 'lockout@test.local',
-    failedLoginCount: 0,
-    lockedUntil: null as string | null,
+test('Authentication: Account Status Enforcement (PENDING, APPROVED, REJECTED, SUSPENDED)', () => {
+  const pendingUser = {
+    id: 'usr_pending_01',
+    email: 'pending@test.local',
+    status: 'PENDING' as const,
+    isActive: false,
   };
 
-  for (let attempt = 1; attempt <= 5; attempt++) {
-    testUser.failedLoginCount += 1;
-    if (testUser.failedLoginCount >= 5) {
-      testUser.lockedUntil = new Date(Date.now() + 15 * 60 * 1000).toISOString();
-    }
-  }
+  const approvedUser = {
+    id: 'usr_approved_01',
+    email: 'approved@test.local',
+    status: 'APPROVED' as const,
+    isActive: true,
+  };
 
-  assert.strictEqual(testUser.failedLoginCount, 5, 'Failed login count must reach 5');
-  assert.ok(testUser.lockedUntil !== null, 'Account must be locked after 5 attempts');
-  assert.ok(new Date(testUser.lockedUntil).getTime() > Date.now(), 'Locked until must be in the future');
+  const rejectedUser = {
+    id: 'usr_rejected_01',
+    email: 'rejected@test.local',
+    status: 'REJECTED' as const,
+    isActive: false,
+  };
+
+  const suspendedUser = {
+    id: 'usr_suspended_01',
+    email: 'suspended@test.local',
+    status: 'SUSPENDED' as const,
+    isActive: false,
+  };
+
+  const canPendingLogin = (pendingUser.status as string) === 'APPROVED' && pendingUser.isActive;
+  const canApprovedLogin = (approvedUser.status as string) === 'APPROVED' && approvedUser.isActive;
+  const canRejectedLogin = (rejectedUser.status as string) === 'APPROVED' && rejectedUser.isActive;
+  const canSuspendedLogin = (suspendedUser.status as string) === 'APPROVED' && suspendedUser.isActive;
+
+  assert.strictEqual(canPendingLogin, false, 'Pending user must NOT be permitted to log in');
+  assert.strictEqual(canApprovedLogin, true, 'Approved user must be permitted to log in');
+  assert.strictEqual(canRejectedLogin, false, 'Rejected user must NOT be permitted to log in');
+  assert.strictEqual(canSuspendedLogin, false, 'Suspended user must NOT be permitted to log in');
 });

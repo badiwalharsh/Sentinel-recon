@@ -12,6 +12,7 @@ export const registerSchema = z
       .regex(/[0-9]/, 'Password must contain at least one number')
       .regex(/[^A-Za-z0-9]/, 'Password must contain at least one special symbol'),
     confirmPassword: z.string().min(1, 'Please confirm your password'),
+    requestedRole: z.enum(['ADMIN', 'ANALYST', 'VIEWER', 'AUDITOR']).default('ANALYST'),
     ethicalAgreementConfirmed: z.boolean().refine((val) => val === true, {
       message: 'You must agree to the Ethical Hacker Code of Conduct & Defensive Use Policy',
     }),
@@ -30,6 +31,23 @@ export const updateRoleSchema = z.object({
   userId: z.string().min(1),
   systemRole: z.enum(['ADMIN', 'ANALYST', 'VIEWER', 'AUDITOR']),
   isActive: z.boolean().optional(),
+  status: z.enum(['PENDING', 'APPROVED', 'REJECTED', 'SUSPENDED', 'DISABLED']).optional(),
+});
+
+export const approveUserSchema = z.object({
+  userId: z.string().min(1),
+  systemRole: z.enum(['ADMIN', 'ANALYST', 'VIEWER', 'AUDITOR']).default('ANALYST'),
+  assignments: z.array(
+    z.object({
+      programId: z.string().min(1),
+      role: z.enum(['LEAD_ANALYST', 'ANALYST', 'VIEWER', 'AUDITOR']).default('ANALYST'),
+    })
+  ).optional().default([]),
+});
+
+export const rejectUserSchema = z.object({
+  userId: z.string().min(1),
+  reason: z.string().max(300).optional(),
 });
 
 export const adminCreateUserSchema = z.object({
@@ -42,4 +60,6 @@ export const adminCreateUserSchema = z.object({
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type UpdateRoleInput = z.infer<typeof updateRoleSchema>;
+export type ApproveUserInput = z.infer<typeof approveUserSchema>;
+export type RejectUserInput = z.infer<typeof rejectUserSchema>;
 export type AdminCreateUserInput = z.infer<typeof adminCreateUserSchema>;

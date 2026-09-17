@@ -285,6 +285,24 @@ export async function POST(req: Request) {
       req,
     });
 
+    const { publishRealtimeEvent } = await import('@/lib/realtime/broker');
+    await publishRealtimeEvent({
+      eventType: 'PROGRAM_CREATED',
+      entityType: 'Program',
+      entityId: newProgram.id,
+      programId: newProgram.id,
+      actorUserId: user.userId,
+      channels: ['global', 'admin:users', `user:${user.userId}`],
+      payload: {
+        id: newProgram.id,
+        name: newProgram.name,
+        slug: newProgram.slug,
+        description: newProgram.description,
+        createdById: newProgram.createdById,
+        createdAt: newProgram.createdAt,
+      },
+    });
+
     return NextResponse.json({ success: true, program: newProgram });
   } catch (err: any) {
     console.error('Create program error:', err);

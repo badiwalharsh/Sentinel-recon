@@ -18,6 +18,14 @@ enum SystemRole {
   AUDITOR
 }
 
+enum UserStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SUSPENDED
+  DISABLED
+}
+
 enum ProgramRole {
   LEAD_ANALYST
   ANALYST
@@ -92,6 +100,10 @@ enum AuditAction {
   USER_LOGIN
   USER_LOGOUT
   USER_REGISTER
+  USER_APPROVE
+  USER_REJECT
+  USER_SUSPEND
+  USER_REACTIVATE
   USER_PASSWORD_CHANGE
   USER_ROLE_CHANGE
   PROGRAM_CREATE
@@ -132,7 +144,13 @@ model User {
   name                      String
   passwordHash              String
   systemRole                SystemRole   @default(ANALYST)
+  requestedRole             SystemRole?  @default(ANALYST)
+  status                    UserStatus   @default(PENDING)
   isActive                  Boolean      @default(true)
+  ethicalUseAccepted        Boolean      @default(false)
+  approvedAt                DateTime?
+  approvedById              String?
+  rejectionReason           String?
   emailVerified             DateTime?
   verificationToken         String?
   resetPasswordToken        String?
@@ -154,6 +172,7 @@ model User {
   notes            Note[]
 
   @@index([email])
+  @@index([status])
 }
 
 model Session {

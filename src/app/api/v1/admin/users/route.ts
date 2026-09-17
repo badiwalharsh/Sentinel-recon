@@ -2,12 +2,11 @@ import { NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth/session';
 import { dbStore, MockUser } from '@/lib/db-store';
 import { prisma } from '@/lib/prisma';
-import { updateRoleSchema, adminCreateUserSchema } from '@/lib/validations/auth';
-import { adminAssignProgramsSchema } from '@/lib/validations/program';
 import { createAuditLog } from '@/lib/audit';
+import { publishRealtimeEvent } from '@/lib/realtime/broker';
 import bcrypt from 'bcryptjs';
 
-export async function GET() {
+export async function GET(req: Request) {
   const user = await getCurrentUser();
   if (!user || user.systemRole !== 'ADMIN') {
     return NextResponse.json({ error: 'Admin privileges required' }, { status: 403 });
@@ -57,7 +56,13 @@ export async function GET() {
         name: u.name,
         email: u.email,
         systemRole: u.systemRole,
+        requestedRole: u.requestedRole || u.systemRole,
+        status: u.status || (u.isActive ? 'APPROVED' : 'SUSPENDED'),
         isActive: u.isActive,
+        ethicalUseAccepted: u.ethicalUseAccepted,
+        approvedAt: u.approvedAt?.toISOString() || null,
+        rejectionReason: u.rejectionReason || null,
+        emailVerified: u.emailVerified?.toISOString() || null,
         twoFactorEnabled: u.twoFactorEnabled,
         failedLoginCount: u.failedLoginCount,
         lockedUntil: u.lockedUntil?.toISOString() || null,
@@ -96,7 +101,13 @@ export async function GET() {
         name: u.name,
         email: u.email,
         systemRole: u.systemRole,
+        requestedRole: u.requestedRole || u.systemRole,
+        status: u.status || (u.isActive ? 'APPROVED' : 'SUSPENDED'),
         isActive: u.isActive,
+        ethicalUseAccepted: u.ethicalUseAccepted ?? true,
+        approvedAt: u.approvedAt || null,
+        rejectionReason: u.rejectionReason || null,
+        emailVerified: u.emailVerified || null,
         twoFactorEnabled: u.twoFactorEnabled,
         failedLoginCount: u.failedLoginCount,
         lockedUntil: u.lockedUntil,
@@ -107,7 +118,15 @@ export async function GET() {
     });
   }
 
-  return NextResponse.json({ users: usersList, allPrograms });
+  const metrics = {
+    total: usersList.length,
+    pending: usersList.filter((u) => u.status === 'PENDING').length,
+    approved: usersList.filter((u) => u.status === 'APPROVED').length,
+    suspended: usersList.filter((u) => u.status === 'SUSPENDED' || (!u.isActive && u.status !== 'PENDING' && u.status !== 'REJECTED')).length,
+    rejected: usersList.filter((u) => u.status === 'REJECTED').length,
+  };
+
+  return NextResponse.json({ users: usersList, allPrograms, metrics });
 }
 
 export async function POST(req: Request) {
@@ -118,19 +137,15 @@ export async function POST(req: Request) {
 
   try {
     const body = await req.json();
-    const parsed = adminCreateUserSchema.safeParse(body);
+    const { name, email, password, systemRole, assignments = [] } = body;
 
-    if (!parsed.success) {
-      return NextResponse.json(
-        { error: 'Invalid user details', details: parsed.error.format() },
-        { status: 400 }
-      );
+    if (!name || !email || !password) {
+      return NextResponse.json({ error: 'Name, email, and password are required' }, { status: 400 });
     }
 
-    const { name, email, password, systemRole } = parsed.data;
     const normalizedEmail = email.toLowerCase().trim();
 
-    // Check if email already exists
+    // Check duplicate
     let existing = dbStore.users.some((u) => u.email.toLowerCase() === normalizedEmail);
     if (!existing) {
       try {
@@ -151,6 +166,7 @@ export async function POST(req: Request) {
     const passwordHash = await bcrypt.hash(password, 10);
     const now = new Date();
     const newUserId = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const finalRole = systemRole || 'ANALYST';
 
     // Create in Prisma
     let dbCreated = false;
@@ -161,8 +177,13 @@ export async function POST(req: Request) {
           name: name.trim(),
           email: normalizedEmail,
           passwordHash,
-          systemRole,
+          systemRole: finalRole,
+          requestedRole: finalRole,
+          status: 'APPROVED',
           isActive: true,
+          ethicalUseAccepted: true,
+          approvedAt: now,
+          approvedById: user.userId,
           emailVerified: now,
           tokenVersion: 1,
         },
@@ -177,8 +198,13 @@ export async function POST(req: Request) {
       name: name.trim(),
       email: normalizedEmail,
       passwordHash,
-      systemRole,
+      systemRole: finalRole,
+      requestedRole: finalRole,
+      status: 'APPROVED',
       isActive: true,
+      ethicalUseAccepted: true,
+      approvedAt: now.toISOString(),
+      approvedById: user.userId,
       emailVerified: now.toISOString(),
       twoFactorEnabled: false,
       failedLoginCount: 0,
@@ -187,24 +213,26 @@ export async function POST(req: Request) {
       createdAt: now.toISOString(),
     };
 
-    // Add user to memory store
     dbStore.users.unshift(newUser);
 
-    // Auto-enroll user into initial active programs
-    for (const prog of dbStore.programs) {
-      if (!prog.memberships.some((m) => m.userId === newUser.id)) {
-        prog.memberships.push({
-          id: `m_${newUser.id}_${prog.id}`,
-          userId: newUser.id,
-          role: systemRole === 'ADMIN' ? 'LEAD_ANALYST' : systemRole === 'VIEWER' ? 'VIEWER' : systemRole === 'AUDITOR' ? 'AUDITOR' : 'ANALYST',
-        });
+    // Process program assignments
+    if (Array.isArray(assignments) && assignments.length > 0) {
+      for (const item of assignments) {
+        const prog = dbStore.programs.find((p) => p.id === item.programId);
+        if (prog) {
+          prog.memberships.push({
+            id: `m_${newUser.id}_${prog.id}`,
+            userId: newUser.id,
+            role: item.role || 'ANALYST',
+          });
+        }
         if (dbCreated) {
           try {
             await prisma.programMembership.create({
               data: {
-                programId: prog.id,
+                programId: item.programId,
                 userId: newUser.id,
-                role: systemRole === 'ADMIN' ? 'LEAD_ANALYST' : systemRole === 'VIEWER' ? 'VIEWER' : systemRole === 'AUDITOR' ? 'AUDITOR' : 'ANALYST',
+                role: item.role || 'ANALYST',
               },
             }).catch(() => {});
           } catch {}
@@ -212,7 +240,6 @@ export async function POST(req: Request) {
       }
     }
 
-    // Persist memory store
     dbStore.persist();
 
     await createAuditLog({
@@ -225,21 +252,40 @@ export async function POST(req: Request) {
         createdUserEmail: newUser.email,
         assignedRole: newUser.systemRole,
         provisionedByAdmin: user.email,
+        status: 'APPROVED',
       },
       req,
     });
 
-    const userPrograms = dbStore.programs
-      .filter((p) => p.memberships.some((m) => m.userId === newUser.id))
-      .map((p) => {
-        const m = p.memberships.find((mem) => mem.userId === newUser.id);
-        return {
-          id: p.id,
-          name: p.name,
-          slug: p.slug,
-          role: m?.role || 'ANALYST',
-        };
-      });
+    await publishRealtimeEvent({
+      eventType: 'USER_REGISTERED',
+      entityType: 'User',
+      entityId: newUser.id,
+      targetUserId: newUser.id,
+      channels: ['admin:users', `user:${newUser.id}`],
+      payload: {
+        id: newUser.id,
+        name: newUser.name,
+        email: newUser.email,
+        systemRole: newUser.systemRole,
+        status: 'APPROVED',
+      },
+    });
+
+    await publishRealtimeEvent({
+      eventType: 'USER_APPROVED',
+      entityType: 'User',
+      entityId: newUser.id,
+      targetUserId: newUser.id,
+      channels: ['admin:users', `user:${newUser.id}`],
+      payload: {
+        id: newUser.id,
+        name: newUser.name,
+        email: newUser.email,
+        systemRole: newUser.systemRole,
+        status: 'APPROVED',
+      },
+    });
 
     return NextResponse.json({
       success: true,
@@ -248,15 +294,340 @@ export async function POST(req: Request) {
         name: newUser.name,
         email: newUser.email,
         systemRole: newUser.systemRole,
+        status: newUser.status,
         isActive: newUser.isActive,
         createdAt: newUser.createdAt,
-        programs: userPrograms,
-        programsCount: userPrograms.length,
       },
     });
   } catch (err: any) {
     console.error('Admin create user error:', err);
     return NextResponse.json({ error: 'Failed to provision user' }, { status: 500 });
+  }
+}
+
+export async function PATCH(req: Request) {
+  const user = await getCurrentUser();
+  if (!user || user.systemRole !== 'ADMIN') {
+    return NextResponse.json({ error: 'Admin privileges required' }, { status: 403 });
+  }
+
+  try {
+    const body = await req.json();
+    const { userId, action, status, systemRole, isActive, rejectionReason, assignments = [] } = body;
+
+    if (!userId) {
+      return NextResponse.json({ error: 'userId is required' }, { status: 400 });
+    }
+
+    if (typeof dbStore.sync === 'function') {
+      dbStore.sync();
+    }
+
+    const targetUser = dbStore.users.find((u) => u.id === userId);
+    if (!targetUser) {
+      return NextResponse.json({ error: 'User not found' }, { status: 404 });
+    }
+
+    const now = new Date();
+    const prevStatus = targetUser.status || (targetUser.isActive ? 'APPROVED' : 'SUSPENDED');
+    const prevRole = targetUser.systemRole;
+
+    // 1. Handle APPROVE
+    if (action === 'APPROVE' || status === 'APPROVED') {
+      const finalRole = systemRole || targetUser.requestedRole || targetUser.systemRole || 'ANALYST';
+      targetUser.status = 'APPROVED';
+      targetUser.isActive = true;
+      targetUser.systemRole = finalRole;
+      targetUser.approvedAt = now.toISOString();
+      targetUser.approvedById = user.userId;
+      targetUser.rejectionReason = null;
+      targetUser.tokenVersion = (targetUser.tokenVersion || 1) + 1;
+
+      // Update in Prisma
+      try {
+        await prisma.user.update({
+          where: { id: userId },
+          data: {
+            status: 'APPROVED',
+            isActive: true,
+            systemRole: finalRole,
+            approvedAt: now,
+            approvedById: user.userId,
+            rejectionReason: null,
+            tokenVersion: targetUser.tokenVersion,
+          },
+        });
+      } catch {}
+
+      // Apply program assignments if provided
+      if (Array.isArray(assignments) && assignments.length > 0) {
+        try {
+          await prisma.programMembership.deleteMany({ where: { userId } });
+          await prisma.programMembership.createMany({
+            data: assignments.map((a: any) => ({
+              programId: a.programId,
+              userId,
+              role: a.role || 'ANALYST',
+            })),
+          });
+        } catch {}
+
+        for (const prog of dbStore.programs) {
+          const assign = assignments.find((a: any) => a.programId === prog.id);
+          const existingIdx = prog.memberships.findIndex((m) => m.userId === userId);
+          if (assign) {
+            if (existingIdx >= 0) {
+              prog.memberships[existingIdx].role = assign.role;
+            } else {
+              prog.memberships.push({
+                id: `m_${userId}_${prog.id}`,
+                userId,
+                role: assign.role,
+              });
+            }
+          } else {
+            if (existingIdx >= 0) {
+              prog.memberships.splice(existingIdx, 1);
+            }
+          }
+        }
+      }
+
+      dbStore.persist();
+
+      await createAuditLog({
+        action: 'USER_APPROVE',
+        entityType: 'User',
+        entityId: targetUser.id,
+        userId: user.userId,
+        details: {
+          targetEmail: targetUser.email,
+          approvedRole: finalRole,
+          assignedProgramsCount: assignments.length,
+          approvedBy: user.email,
+        },
+        req,
+      });
+
+      await publishRealtimeEvent({
+        eventType: 'USER_APPROVED',
+        entityType: 'User',
+        entityId: targetUser.id,
+        targetUserId: targetUser.id,
+        channels: ['admin:users', `user:${targetUser.id}`],
+        payload: {
+          id: targetUser.id,
+          name: targetUser.name,
+          email: targetUser.email,
+          systemRole: targetUser.systemRole,
+          status: 'APPROVED',
+          assignmentsCount: assignments.length,
+        },
+      });
+
+      if (assignments.length > 0) {
+        await publishRealtimeEvent({
+          eventType: 'USER_PROGRAM_ASSIGNED',
+          entityType: 'ProgramMembership',
+          entityId: targetUser.id,
+          targetUserId: targetUser.id,
+          channels: ['admin:users', `user:${targetUser.id}`],
+          payload: {
+            userId: targetUser.id,
+            assignments,
+          },
+        });
+      }
+
+      return NextResponse.json({ success: true, user: targetUser });
+    }
+
+    // 2. Handle REJECT
+    if (action === 'REJECT' || status === 'REJECTED') {
+      targetUser.status = 'REJECTED';
+      targetUser.isActive = false;
+      targetUser.rejectionReason = rejectionReason || 'Registration rejected by administrator';
+      targetUser.tokenVersion = (targetUser.tokenVersion || 1) + 1;
+
+      try {
+        await prisma.user.update({
+          where: { id: userId },
+          data: {
+            status: 'REJECTED',
+            isActive: false,
+            rejectionReason: targetUser.rejectionReason,
+            tokenVersion: targetUser.tokenVersion,
+          },
+        });
+      } catch {}
+
+      dbStore.persist();
+
+      await createAuditLog({
+        action: 'USER_REJECT',
+        entityType: 'User',
+        entityId: targetUser.id,
+        userId: user.userId,
+        details: {
+          targetEmail: targetUser.email,
+          reason: targetUser.rejectionReason,
+          rejectedBy: user.email,
+        },
+        req,
+      });
+
+      await publishRealtimeEvent({
+        eventType: 'USER_REJECTED',
+        entityType: 'User',
+        entityId: targetUser.id,
+        targetUserId: targetUser.id,
+        channels: ['admin:users', `user:${targetUser.id}`],
+        payload: {
+          id: targetUser.id,
+          email: targetUser.email,
+          status: 'REJECTED',
+          reason: targetUser.rejectionReason,
+        },
+      });
+
+      return NextResponse.json({ success: true, user: targetUser });
+    }
+
+    // 3. Handle SUSPEND
+    if (action === 'SUSPEND' || status === 'SUSPENDED' || (typeof isActive === 'boolean' && !isActive)) {
+      targetUser.status = 'SUSPENDED';
+      targetUser.isActive = false;
+      targetUser.tokenVersion = (targetUser.tokenVersion || 1) + 1;
+
+      try {
+        await prisma.user.update({
+          where: { id: userId },
+          data: {
+            status: 'SUSPENDED',
+            isActive: false,
+            tokenVersion: targetUser.tokenVersion,
+          },
+        });
+      } catch {}
+
+      dbStore.persist();
+
+      await createAuditLog({
+        action: 'USER_SUSPEND',
+        entityType: 'User',
+        entityId: targetUser.id,
+        userId: user.userId,
+        details: { targetEmail: targetUser.email, suspendedBy: user.email },
+        req,
+      });
+
+      await publishRealtimeEvent({
+        eventType: 'USER_SUSPENDED',
+        entityType: 'User',
+        entityId: targetUser.id,
+        targetUserId: targetUser.id,
+        channels: ['admin:users', `user:${targetUser.id}`],
+        payload: {
+          id: targetUser.id,
+          email: targetUser.email,
+          status: 'SUSPENDED',
+        },
+      });
+
+      return NextResponse.json({ success: true, user: targetUser });
+    }
+
+    // 4. Handle REACTIVATE
+    if (action === 'REACTIVATE' || (typeof isActive === 'boolean' && isActive && targetUser.status === 'SUSPENDED')) {
+      targetUser.status = 'APPROVED';
+      targetUser.isActive = true;
+      targetUser.tokenVersion = (targetUser.tokenVersion || 1) + 1;
+
+      try {
+        await prisma.user.update({
+          where: { id: userId },
+          data: {
+            status: 'APPROVED',
+            isActive: true,
+            tokenVersion: targetUser.tokenVersion,
+          },
+        });
+      } catch {}
+
+      dbStore.persist();
+
+      await createAuditLog({
+        action: 'USER_REACTIVATE',
+        entityType: 'User',
+        entityId: targetUser.id,
+        userId: user.userId,
+        details: { targetEmail: targetUser.email, reactivatedBy: user.email },
+        req,
+      });
+
+      await publishRealtimeEvent({
+        eventType: 'USER_REACTIVATED',
+        entityType: 'User',
+        entityId: targetUser.id,
+        targetUserId: targetUser.id,
+        channels: ['admin:users', `user:${targetUser.id}`],
+        payload: {
+          id: targetUser.id,
+          email: targetUser.email,
+          status: 'APPROVED',
+        },
+      });
+
+      return NextResponse.json({ success: true, user: targetUser });
+    }
+
+    // 5. Handle ROLE CHANGE
+    if (systemRole && systemRole !== targetUser.systemRole) {
+      targetUser.systemRole = systemRole;
+      targetUser.tokenVersion = (targetUser.tokenVersion || 1) + 1;
+
+      try {
+        await prisma.user.update({
+          where: { id: userId },
+          data: {
+            systemRole: systemRole as any,
+            tokenVersion: targetUser.tokenVersion,
+          },
+        });
+      } catch {}
+
+      dbStore.persist();
+
+      await createAuditLog({
+        action: 'USER_ROLE_CHANGE',
+        entityType: 'User',
+        entityId: targetUser.id,
+        userId: user.userId,
+        details: { targetEmail: targetUser.email, oldRole: prevRole, newRole: systemRole },
+        req,
+      });
+
+      await publishRealtimeEvent({
+        eventType: 'USER_ROLE_CHANGED',
+        entityType: 'User',
+        entityId: targetUser.id,
+        targetUserId: targetUser.id,
+        channels: ['admin:users', `user:${targetUser.id}`],
+        payload: {
+          id: targetUser.id,
+          email: targetUser.email,
+          oldRole: prevRole,
+          newRole: systemRole,
+        },
+      });
+
+      return NextResponse.json({ success: true, user: targetUser });
+    }
+
+    return NextResponse.json({ success: true, user: targetUser });
+  } catch (err) {
+    console.error('Admin PATCH user error:', err);
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
@@ -268,18 +639,13 @@ export async function PUT(req: Request) {
 
   try {
     const body = await req.json();
-    const parsed = adminAssignProgramsSchema.safeParse(body);
+    const { userId, assignments = [] } = body;
 
-    if (!parsed.success) {
-      return NextResponse.json(
-        { error: 'Invalid assignment payload', details: parsed.error.format() },
-        { status: 400 }
-      );
+    if (!userId) {
+      return NextResponse.json({ error: 'userId is required' }, { status: 400 });
     }
 
-    const { userId, assignments } = parsed.data;
     const targetUser = dbStore.users.find((u) => u.id === userId);
-
     if (!targetUser) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
@@ -291,7 +657,7 @@ export async function PUT(req: Request) {
       });
       if (assignments.length > 0) {
         await prisma.programMembership.createMany({
-          data: assignments.map((a) => ({
+          data: assignments.map((a: any) => ({
             programId: a.programId,
             userId,
             role: a.role as any,
@@ -300,9 +666,9 @@ export async function PUT(req: Request) {
       }
     } catch {}
 
-    // Update memberships across memory store
+    // Update memberships in memory store
     for (const prog of dbStore.programs) {
-      const assignment = assignments.find((a) => a.programId === prog.id);
+      const assignment = assignments.find((a: any) => a.programId === prog.id);
       const existingMemIndex = prog.memberships.findIndex((m) => m.userId === targetUser.id);
 
       if (assignment) {
@@ -332,13 +698,25 @@ export async function PUT(req: Request) {
       details: {
         targetUserEmail: targetUser.email,
         assignedProgramsCount: assignments.length,
-        assignments: assignments.map((a) => ({
+        assignments: assignments.map((a: any) => ({
           programId: a.programId,
           role: a.role,
         })),
         updatedByAdmin: user.email,
       },
       req,
+    });
+
+    await publishRealtimeEvent({
+      eventType: 'USER_PROGRAM_ASSIGNED',
+      entityType: 'ProgramMembership',
+      entityId: targetUser.id,
+      targetUserId: targetUser.id,
+      channels: ['admin:users', `user:${targetUser.id}`],
+      payload: {
+        userId: targetUser.id,
+        assignments,
+      },
     });
 
     const updatedPrograms = dbStore.programs
@@ -369,65 +747,3 @@ export async function PUT(req: Request) {
     return NextResponse.json({ error: 'Failed to update program assignments' }, { status: 500 });
   }
 }
-
-export async function PATCH(req: Request) {
-  const user = await getCurrentUser();
-  if (!user || user.systemRole !== 'ADMIN') {
-    return NextResponse.json({ error: 'Admin privileges required' }, { status: 403 });
-  }
-
-  try {
-    const body = await req.json();
-    const parsed = updateRoleSchema.safeParse(body);
-
-    if (!parsed.success) {
-      return NextResponse.json({ error: 'Invalid update payload', details: parsed.error.format() }, { status: 400 });
-    }
-
-    const { userId, systemRole, isActive } = parsed.data;
-    const targetUser = dbStore.users.find((u) => u.id === userId);
-
-    if (!targetUser) {
-      return NextResponse.json({ error: 'User not found' }, { status: 404 });
-    }
-
-    const prevRole = targetUser.systemRole;
-    targetUser.systemRole = systemRole;
-    if (typeof isActive === 'boolean') {
-      targetUser.isActive = isActive;
-    }
-    // Invalidate existing sessions for the target user immediately
-    targetUser.tokenVersion = (targetUser.tokenVersion || 1) + 1;
-
-    // Update in Prisma
-    try {
-      await prisma.user.update({
-        where: { id: userId },
-        data: {
-          systemRole: systemRole as any,
-          isActive: typeof isActive === 'boolean' ? isActive : undefined,
-          tokenVersion: targetUser.tokenVersion,
-        },
-      });
-    } catch {}
-
-    dbStore.persist();
-
-    await createAuditLog({
-      action: 'USER_ROLE_CHANGE',
-      entityType: 'User',
-      entityId: targetUser.id,
-      userId: user.userId,
-      details: { targetEmail: targetUser.email, oldRole: prevRole, newRole: systemRole, isActive: targetUser.isActive },
-      req,
-    });
-
-    return NextResponse.json({ success: true, user: targetUser });
-  } catch (err) {
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
-  }
-}
-
-
-
-

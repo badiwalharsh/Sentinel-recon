@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth/session';
 import { dbStore } from '@/lib/db-store';
 import { Navbar } from '@/components/shared/navbar';
+import { RealtimeProvider } from '@/components/shared/RealtimeProvider';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,10 +24,14 @@ export default async function DashboardLayout({ children }: { children: React.Re
     );
   }
 
+  const userChannels = ['global', `user:${user.userId}`];
+
   return (
-    <div className="min-h-screen flex flex-col bg-[#070b14] text-slate-100">
-      <Navbar user={user} programs={programs} />
-      <main className="flex-1 flex flex-col">{children}</main>
-    </div>
+    <RealtimeProvider channels={userChannels}>
+      <div className="min-h-screen flex flex-col bg-[#070b14] text-slate-100">
+        <Navbar user={user} programs={programs} />
+        <main className="flex-1 flex flex-col">{children}</main>
+      </div>
+    </RealtimeProvider>
   );
 }

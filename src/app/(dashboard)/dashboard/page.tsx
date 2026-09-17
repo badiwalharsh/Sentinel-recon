@@ -28,19 +28,26 @@ export default async function DashboardPage() {
   const accessiblePrograms =
     user?.systemRole === 'ADMIN'
       ? dbStore.programs
-      : dbStore.programs.filter((p) => p.memberships.some((m) => m.userId === user?.userId));
+      : dbStore.programs.filter((p) => (p.memberships || []).some((m) => m.userId === user?.userId));
 
-  const totalTargets = dbStore.targets.length;
-  const totalAssets = dbStore.assets.length;
-  const totalFindings = dbStore.findings.length;
-  const criticalFindings = dbStore.findings.filter((f) => f.severity === 'CRITICAL' || f.severity === 'HIGH').length;
-  const totalOSINT = dbStore.osintRecords.length;
+  const accessibleProgramIds = new Set(accessiblePrograms.map((p) => p.id));
 
-  const recentFindings = [...dbStore.findings]
+  const scopedTargets = dbStore.targets.filter((t) => accessibleProgramIds.has(t.programId));
+  const scopedAssets = dbStore.assets.filter((a) => accessibleProgramIds.has(a.programId));
+  const scopedFindings = dbStore.findings.filter((f) => accessibleProgramIds.has(f.programId));
+  const scopedOSINT = dbStore.osintRecords.filter((o) => accessibleProgramIds.has(o.programId));
+
+  const totalTargets = scopedTargets.length;
+  const totalAssets = scopedAssets.length;
+  const totalFindings = scopedFindings.length;
+  const criticalFindings = scopedFindings.filter((f) => f.severity === 'CRITICAL' || f.severity === 'HIGH').length;
+  const totalOSINT = scopedOSINT.length;
+
+  const recentFindings = [...scopedFindings]
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     .slice(0, 4);
 
-  const recentOSINT = [...dbStore.osintRecords]
+  const recentOSINT = [...scopedOSINT]
     .sort((a, b) => new Date(b.collectedAt).getTime() - new Date(a.collectedAt).getTime())
     .slice(0, 4);
 

@@ -15,13 +15,21 @@ function getPersistencePaths(): string[] {
 }
 
 
+export type UserStatusType = 'PENDING' | 'APPROVED' | 'REJECTED' | 'SUSPENDED' | 'DISABLED';
+
 export interface MockUser {
   id: string;
   email: string;
   name: string;
   passwordHash: string;
   systemRole: 'ADMIN' | 'ANALYST' | 'VIEWER' | 'AUDITOR';
+  requestedRole?: 'ADMIN' | 'ANALYST' | 'VIEWER' | 'AUDITOR';
+  status: UserStatusType;
   isActive: boolean;
+  ethicalUseAccepted?: boolean;
+  approvedAt?: string | null;
+  approvedById?: string | null;
+  rejectionReason?: string | null;
   twoFactorEnabled: boolean;
   failedLoginCount: number;
   lockedUntil: string | null;
@@ -370,7 +378,10 @@ class MemoryDataStore {
           name: roleDef.name,
           passwordHash,
           systemRole: roleDef.systemRole,
+          status: 'APPROVED',
           isActive: true,
+          ethicalUseAccepted: true,
+          approvedAt: now,
           emailVerified: now,
           twoFactorEnabled: false,
           failedLoginCount: 0,
@@ -381,6 +392,7 @@ class MemoryDataStore {
         this.users.push(existing);
       } else {
         // Ensure user is active and has valid role
+        existing.status = existing.status || 'APPROVED';
         existing.isActive = true;
         existing.lockedUntil = null;
         existing.failedLoginCount = 0;
@@ -401,7 +413,10 @@ class MemoryDataStore {
       name: 'Sarah Connor (Security Admin)',
       passwordHash: adminHash,
       systemRole: 'ADMIN',
+      status: 'APPROVED',
       isActive: true,
+      ethicalUseAccepted: true,
+      approvedAt: now,
       emailVerified: now,
       twoFactorEnabled: false,
       failedLoginCount: 0,
@@ -416,7 +431,10 @@ class MemoryDataStore {
       name: 'Marcus Vance (Lead Analyst)',
       passwordHash: analystHash,
       systemRole: 'ANALYST',
+      status: 'APPROVED',
       isActive: true,
+      ethicalUseAccepted: true,
+      approvedAt: now,
       emailVerified: now,
       twoFactorEnabled: false,
       failedLoginCount: 0,
@@ -431,7 +449,10 @@ class MemoryDataStore {
       name: 'Elena Rostova (Compliance Auditor)',
       passwordHash: auditorHash,
       systemRole: 'AUDITOR',
+      status: 'APPROVED',
       isActive: true,
+      ethicalUseAccepted: true,
+      approvedAt: now,
       emailVerified: now,
       twoFactorEnabled: false,
       failedLoginCount: 0,
@@ -446,7 +467,10 @@ class MemoryDataStore {
       name: 'David Chen (Security Viewer)',
       passwordHash: viewerHash,
       systemRole: 'VIEWER',
+      status: 'APPROVED',
       isActive: true,
+      ethicalUseAccepted: true,
+      approvedAt: now,
       emailVerified: now,
       twoFactorEnabled: false,
       failedLoginCount: 0,

@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Modal } from '@/components/ui/modal';
 import { Input } from '@/components/ui/input';
+import { useRealtime } from '@/hooks/useRealtime';
 
 export const dynamic = 'force-dynamic';
 
@@ -52,6 +53,11 @@ export default function ProgramsPage() {
   useEffect(() => {
     fetchPrograms();
   }, []);
+
+  // Listen for real-time program events
+  useRealtime(['global', 'admin:users'], () => {
+    fetchPrograms();
+  });
 
   const handleCreateProgram = async (e: React.FormEvent) => {
     e.preventDefault();

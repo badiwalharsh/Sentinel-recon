@@ -1,21 +1,55 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Lock, Mail, User, AlertCircle, ShieldCheck, Check, ArrowRight, Globe, KeyRound } from 'lucide-react';
+import {
+  Lock,
+  Mail,
+  User,
+  AlertCircle,
+  ShieldCheck,
+  Check,
+  ArrowRight,
+  Clock,
+  CheckCircle2,
+  Radio,
+  RefreshCw,
+  Sparkles,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { useRealtime } from '@/hooks/useRealtime';
+
 export default function RegisterPage() {
   const router = useRouter();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [requestedRole, setRequestedRole] = useState<'ADMIN' | 'ANALYST' | 'VIEWER' | 'AUDITOR'>('ANALYST');
   const [ethicalAgreement, setEthicalAgreement] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Post-registration state
+  const [registeredUser, setRegisteredUser] = useState<{
+    id: string;
+    name: string;
+    email: string;
+    requestedRole: string;
+    status: string;
+  } | null>(null);
+  const [isApprovedLive, setIsApprovedLive] = useState(false);
+
+  // Subscribe to real-time events for this registered user
+  const channel = registeredUser ? `user:${registeredUser.id}` : 'global';
+  useRealtime(channel, (event) => {
+    if (event.eventType === 'USER_APPROVED' || (event.eventType === 'USER_ROLE_CHANGED' && event.payload?.status === 'APPROVED')) {
+      setIsApprovedLive(true);
+    }
+  });
 
   // Password complexity checks
   const checks = {
@@ -65,6 +99,7 @@ export default function RegisterPage() {
           email: email.trim().toLowerCase(),
           password,
           confirmPassword,
+          requestedRole,
           ethicalAgreementConfirmed: true,
         }),
       });
@@ -77,28 +112,109 @@ export default function RegisterPage() {
         return;
       }
 
-      // Automatically authenticate the newly registered user
-      try {
-        const loginRes = await fetch('/api/v1/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
-        });
-
-        if (loginRes.ok) {
-          window.location.href = '/dashboard';
-          return;
-        }
-      } catch {
-        // Fallback to login page
-      }
-
-      window.location.href = `/login?registered=true&email=${encodeURIComponent(email.trim().toLowerCase())}`;
+      setRegisteredUser({
+        id: data.user.id,
+        name: data.user.name,
+        email: data.user.email,
+        requestedRole: data.user.requestedRole || requestedRole,
+        status: data.user.status || 'PENDING',
+      });
+      setLoading(false);
     } catch (err) {
       setError('Connection to security gateway failed.');
       setLoading(false);
     }
   };
+
+  // If user has successfully registered and is in PENDING / APPROVED state
+  if (registeredUser) {
+    return (
+      <Card className="border-slate-800 bg-slate-900/95 shadow-2xl backdrop-blur-md max-w-lg mx-auto">
+        <CardHeader className="text-center pb-3">
+          <div className="mx-auto mb-3 flex items-center justify-center w-12 h-12 rounded-xl bg-purple-950/60 border border-purple-500/30 text-purple-400">
+            {isApprovedLive ? (
+              <CheckCircle2 className="w-6 h-6 text-emerald-400 animate-in zoom-in-50 duration-300" />
+            ) : (
+              <Clock className="w-6 h-6 text-amber-400 animate-pulse" />
+            )}
+          </div>
+          <CardTitle className="text-xl font-mono text-slate-100">
+            {isApprovedLive ? 'Account Approved!' : 'Registration Pending Approval'}
+          </CardTitle>
+          <CardDescription className="text-xs font-mono text-slate-400">
+            {isApprovedLive
+              ? 'Your security clearance has been granted by an administrator.'
+              : 'Your registration request has been submitted to the platform administrators.'}
+          </CardDescription>
+        </CardHeader>
+
+        <CardContent className="space-y-4 pt-2">
+          {/* Summary Box */}
+          <div className="p-4 rounded-lg bg-slate-950/80 border border-slate-800 space-y-2.5 text-xs font-mono">
+            <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
+              <span className="text-slate-400">Operator Name:</span>
+              <span className="text-slate-200 font-semibold">{registeredUser.name}</span>
+            </div>
+            <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
+              <span className="text-slate-400">Login Email:</span>
+              <span className="text-purple-300 select-all">{registeredUser.email}</span>
+            </div>
+            <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
+              <span className="text-slate-400">Requested Role:</span>
+              <span className="text-slate-200 font-semibold">{registeredUser.requestedRole}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Account Status:</span>
+              {isApprovedLive ? (
+                <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold">
+                  APPROVED
+                </span>
+              ) : (
+                <span className="px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-500/40 text-[10px] font-bold flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping"></span>
+                  PENDING REVIEW
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Real-time Indicator Banner */}
+          {!isApprovedLive ? (
+            <div className="p-3.5 rounded-lg bg-slate-950/60 border border-purple-500/20 text-xs font-mono text-slate-300 flex items-start gap-2.5">
+              <Radio className="w-4 h-4 text-purple-400 shrink-0 mt-0.5 animate-pulse" />
+              <div className="space-y-1">
+                <p className="font-semibold text-slate-200">Listening for Real-Time Approval</p>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  The administrator dashboard was notified instantly. As soon as an administrator approves your account and assigns your security programs, this page will update automatically.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="p-3.5 rounded-lg bg-emerald-950/60 border border-emerald-500/40 text-xs font-mono text-emerald-300 flex items-center gap-2.5">
+              <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+              <div>
+                <p className="font-semibold text-emerald-200">Administrator Approval Confirmed!</p>
+                <p className="text-[11px] text-emerald-400">You can now authenticate and access your assigned security programs.</p>
+              </div>
+            </div>
+          )}
+
+          <div className="pt-2 flex flex-col gap-2">
+            <Button
+              onClick={() => router.push(`/login?email=${encodeURIComponent(registeredUser.email)}`)}
+              variant="primary"
+              className={`w-full font-mono text-xs py-2.5 flex items-center justify-center gap-2 ${
+                isApprovedLive ? 'bg-emerald-600 hover:bg-emerald-500 border-emerald-500 text-white' : ''
+              }`}
+            >
+              <span>{isApprovedLive ? 'Proceed to Sign In' : 'Go to Sign In Gateway'}</span>
+              <ArrowRight className="w-4 h-4" />
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <Card className="border-slate-800 bg-slate-900/95 shadow-2xl backdrop-blur-md">
@@ -107,12 +223,11 @@ export default function RegisterPage() {
           <ShieldCheck className="w-5 h-5" />
         </div>
         <CardTitle className="text-xl font-mono text-slate-100">
-          ReconFlow OSINT Workbench
+          Sentinel Recon OSINT Workbench
         </CardTitle>
         <CardDescription className="text-xs font-mono text-slate-400">
-          New Operator Registration & Role Initialization (Default: Analyst)
+          New Operator Registration & Role Request
         </CardDescription>
-
       </CardHeader>
 
       <CardContent className="space-y-4 pt-3">
@@ -135,7 +250,7 @@ export default function RegisterPage() {
           />
 
           <Input
-            label="OPERATOR EMAIL"
+            label="OPERATOR EMAIL / LOGIN ID"
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
@@ -143,6 +258,23 @@ export default function RegisterPage() {
             leftIcon={<Mail className="w-4 h-4" />}
             required
           />
+
+          <div className="space-y-1.5">
+            <label className="block text-xs font-mono font-medium text-slate-300">REQUESTED SYSTEM ROLE</label>
+            <select
+              value={requestedRole}
+              onChange={(e) => setRequestedRole(e.target.value as any)}
+              className="w-full bg-slate-950 border border-slate-700/80 rounded-md text-xs text-slate-200 px-3 py-2 focus:outline-none focus:border-purple-500 font-mono"
+            >
+              <option value="ANALYST">ANALYST — Active reconnaissance, target triage & findings execution</option>
+              <option value="VIEWER">VIEWER — Read-only access to intelligence, assets & relationship graph</option>
+              <option value="AUDITOR">AUDITOR — Compliance oversight and read-only audit log ledger</option>
+              <option value="ADMIN">ADMIN — Full platform control, operator provisioning & program scoping</option>
+            </select>
+            <p className="text-[11px] font-mono text-slate-500">
+              Note: The requested role will be reviewed by an administrator during authorization approval.
+            </p>
+          </div>
 
           <Input
             label="STRONG PASSPHRASE (MIN 12 CHARACTERS)"
@@ -205,18 +337,18 @@ export default function RegisterPage() {
               <Link href="/terms-and-ethics" target="_blank" className="text-emerald-400 hover:underline">
                 Terms of Service & Ethical Use Policy
               </Link>{' '}
-              and certify that all operations will remain within authorized scope.
+              and certify that all operations will remain strictly within authorized scopes.
             </label>
           </div>
 
           <Button type="submit" variant="primary" loading={loading} className="w-full font-mono text-xs py-2.5 flex items-center justify-center gap-2">
-            <span>Register & Initialize Operator</span>
+            <span>Submit Registration Request</span>
             <ArrowRight className="w-4 h-4" />
           </Button>
         </form>
 
         <div className="pt-2 text-center text-xs text-slate-400">
-          Already registered?{' '}
+          Already approved?{' '}
           <Link href="/login" className="text-emerald-400 hover:underline font-mono">
             Sign In Here
           </Link>

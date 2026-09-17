@@ -48,9 +48,23 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Invalid or expired verification token' }, { status: 400 });
     }
 
-    // Verify user
-    user.emailVerified = new Date().toISOString();
+    // Verify user email
+    const now = new Date();
+    user.emailVerified = now.toISOString();
     user.verificationToken = null;
+
+    try {
+      const { prisma } = await import('@/lib/prisma');
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          emailVerified: now,
+          verificationToken: null,
+        },
+      }).catch(() => {});
+    } catch {}
+
+    dbStore.persist();
 
     await createAuditLog({
       action: 'USER_EMAIL_VERIFIED',
@@ -61,30 +75,62 @@ export async function POST(req: Request) {
       req,
     });
 
-    // Establish session
-    const sessionToken = await signSessionToken({
-      userId: user.id,
-      email: user.email,
-      name: user.name,
-      systemRole: user.systemRole,
-      tokenVersion: user.tokenVersion || 1,
+    const { publishRealtimeEvent } = await import('@/lib/realtime/broker');
+    await publishRealtimeEvent({
+      eventType: 'USER_EMAIL_VERIFIED',
+      entityType: 'User',
+      entityId: user.id,
+      targetUserId: user.id,
+      channels: ['admin:users', `user:${user.id}`],
+      payload: {
+        id: user.id,
+        email: user.email,
+        emailVerified: user.emailVerified,
+        status: user.status,
+      },
     });
 
-    const response = NextResponse.json({
+    if (user.status === 'APPROVED' && user.isActive) {
+      // Establish session if already approved
+      const sessionToken = await signSessionToken({
+        userId: user.id,
+        email: user.email,
+        name: user.name,
+        systemRole: user.systemRole,
+        status: user.status,
+        tokenVersion: user.tokenVersion || 1,
+      });
+
+      const response = NextResponse.json({
+        success: true,
+        isApproved: true,
+        message: 'Email address verified successfully. Security clearance active.',
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          systemRole: user.systemRole,
+          status: user.status,
+        },
+      });
+
+      const cookieOptions = getSessionCookieOptions(req);
+      response.cookies.set(SESSION_COOKIE_NAME, sessionToken, cookieOptions);
+      return response;
+    }
+
+    return NextResponse.json({
       success: true,
-      message: 'Email address verified successfully. Security clearance active.',
+      isApproved: false,
+      status: 'PENDING',
+      message: 'Email address verified successfully. Your account is pending administrator approval before you can sign in.',
       user: {
         id: user.id,
         name: user.name,
         email: user.email,
-        systemRole: user.systemRole,
+        status: user.status || 'PENDING',
       },
     });
-
-    const cookieOptions = getSessionCookieOptions(req);
-    response.cookies.set(SESSION_COOKIE_NAME, sessionToken, cookieOptions);
-
-    return response;
   } catch (err: any) {
     console.error('Email verification error:', err);
     return NextResponse.json({ error: 'Verification failed' }, { status: 500 });

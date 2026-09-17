@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Shield, ShieldAlert, LogOut, User, Lock, Terminal } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useRouter } from 'next/navigation';
+import { RealtimeStatusIndicator } from './RealtimeProvider';
 
 interface NavbarProps {
   user?: {
@@ -76,10 +77,13 @@ export function Navbar({ user, programs = [], activeProgramSlug }: NavbarProps) 
           )}
         </div>
 
-        {/* Center: Security Badge */}
-        <div className="hidden lg:flex items-center gap-2 px-3 py-1 bg-emerald-950/30 border border-emerald-500/20 rounded-full text-[11px] font-mono text-emerald-400">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping inline-block" />
-          <span>AUTHORIZED DEFENSIVE SCOPE ONLY</span>
+        {/* Center: Security Badge & Realtime Indicator */}
+        <div className="hidden lg:flex items-center gap-3">
+          <div className="flex items-center gap-2 px-3 py-1 bg-emerald-950/30 border border-emerald-500/20 rounded-full text-[11px] font-mono text-emerald-400">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping inline-block" />
+            <span>AUTHORIZED DEFENSIVE SCOPE ONLY</span>
+          </div>
+          <RealtimeStatusIndicator />
         </div>
 
         {/* User controls */}

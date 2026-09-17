@@ -24,12 +24,18 @@ import {
   Check,
   FolderCheck,
   ArrowRight,
+  Clock,
+  UserX,
+  Filter,
+  CheckCircle2,
+  Radio,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { formatDate } from '@/lib/utils';
+import { useRealtime } from '@/hooks/useRealtime';
 
 export const dynamic = 'force-dynamic';
 
@@ -47,9 +53,11 @@ export default function AdminUsersPage() {
   const [loading, setLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  
+  const [statusFilter, setStatusFilter] = useState<string>('ALL');
+  const [activeTab, setActiveTab] = useState<'pending' | 'all'>('pending');
+
   // Create User Modal state
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -61,7 +69,19 @@ export default function AdminUsersPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  // Program Assignment Modal state
+  // Approval Modal state
+  const [approveUser, setApproveUser] = useState<any | null>(null);
+  const [selectedRoleForApproval, setSelectedRoleForApproval] = useState<string>('ANALYST');
+  const [approvalPrograms, setApprovalPrograms] = useState<Record<string, { enabled: boolean; role: 'LEAD_ANALYST' | 'ANALYST' | 'VIEWER' | 'AUDITOR' }>>({});
+  const [approving, setApproving] = useState(false);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
+
+  // Reject Modal state
+  const [rejectUser, setRejectUser] = useState<any | null>(null);
+  const [rejectionReason, setRejectionReason] = useState('');
+  const [rejecting, setRejecting] = useState(false);
+
+  // Program Assignment Modal state (for already approved users)
   const [assignUser, setAssignUser] = useState<any | null>(null);
   const [selectedPrograms, setSelectedPrograms] = useState<Record<string, { enabled: boolean; role: 'LEAD_ANALYST' | 'ANALYST' | 'VIEWER' | 'AUDITOR' }>>({});
   const [savingAssignments, setSavingAssignments] = useState(false);
@@ -84,14 +104,96 @@ export default function AdminUsersPage() {
 
   useEffect(() => {
     fetchUsers();
-
-    // Auto-refresh user list every 12 seconds for near real-time state visibility
-    const interval = setInterval(() => {
-      fetchUsers();
-    }, 12000);
-
-    return () => clearInterval(interval);
   }, []);
+
+  // Real-time synchronization: listens to admin:users channel
+  useRealtime('admin:users', () => {
+    fetchUsers();
+  });
+
+  const handleOpenApprovalModal = (user: any) => {
+    setApproveUser(user);
+    setSelectedRoleForApproval(user.requestedRole || 'ANALYST');
+    setApprovalError(null);
+
+    const initialMap: Record<string, { enabled: boolean; role: 'LEAD_ANALYST' | 'ANALYST' | 'VIEWER' | 'AUDITOR' }> = {};
+    allPrograms.forEach((p) => {
+      initialMap[p.id] = {
+        enabled: true, // default to enrolling in active programs
+        role: user.requestedRole === 'ADMIN' ? 'LEAD_ANALYST' : 'ANALYST',
+      };
+    });
+    setApprovalPrograms(initialMap);
+  };
+
+  const handleConfirmApproval = async () => {
+    if (!approveUser) return;
+    setApproving(true);
+    setApprovalError(null);
+
+    const assignments = Object.entries(approvalPrograms)
+      .filter(([_, val]) => val.enabled)
+      .map(([programId, val]) => ({
+        programId,
+        role: val.role,
+      }));
+
+    try {
+      const res = await fetch('/api/v1/admin/users', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: approveUser.id,
+          action: 'APPROVE',
+          systemRole: selectedRoleForApproval,
+          assignments,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setApprovalError(data.error || 'Failed to approve operator');
+        setApproving(false);
+        return;
+      }
+
+      setSuccessMessage(`Operator "${approveUser.name}" (${approveUser.email}) successfully approved with role ${selectedRoleForApproval} and ${assignments.length} program scopes!`);
+      setApproveUser(null);
+      fetchUsers();
+    } catch (err) {
+      setApprovalError('Network error while processing approval');
+    } finally {
+      setApproving(false);
+    }
+  };
+
+  const handleConfirmRejection = async () => {
+    if (!rejectUser) return;
+    setRejecting(true);
+
+    try {
+      const res = await fetch('/api/v1/admin/users', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: rejectUser.id,
+          action: 'REJECT',
+          rejectionReason,
+        }),
+      });
+
+      if (res.ok) {
+        setSuccessMessage(`Registration request for "${rejectUser.email}" has been rejected.`);
+        setRejectUser(null);
+        setRejectionReason('');
+        fetchUsers();
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setRejecting(false);
+    }
+  };
 
   const handleUpdateRole = async (userId: string, newRole: string) => {
     setUpdatingId(userId);
@@ -109,13 +211,15 @@ export default function AdminUsersPage() {
     }
   };
 
-  const handleToggleActive = async (userId: string, currentStatus: boolean, systemRole: string) => {
+  const handleToggleSuspend = async (userId: string, currentStatus: string) => {
     setUpdatingId(userId);
+    const action = currentStatus === 'SUSPENDED' ? 'REACTIVATE' : 'SUSPEND';
+
     try {
       await fetch('/api/v1/admin/users', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, systemRole, isActive: !currentStatus }),
+        body: JSON.stringify({ userId, action }),
       });
       fetchUsers();
     } catch (e) {
@@ -173,7 +277,7 @@ export default function AdminUsersPage() {
         password: '',
         systemRole: 'ANALYST',
       });
-      setIsModalOpen(false);
+      setIsCreateModalOpen(false);
       fetchUsers();
     } catch (err) {
       setFormError('Network communication error with user provisioning service.');
@@ -182,7 +286,7 @@ export default function AdminUsersPage() {
     }
   };
 
-  // Open Program Assignment Modal for a specific user (or self)
+  // Program Assignment Modal (for already active users)
   const openProgramAssignmentModal = (user: any) => {
     setAssignUser(user);
     setAssignmentError(null);
@@ -241,25 +345,22 @@ export default function AdminUsersPage() {
     }
   };
 
-  const toggleSelectAll = (enableAll: boolean, defaultRole: 'LEAD_ANALYST' | 'ANALYST' = 'ANALYST') => {
-    const updated: Record<string, { enabled: boolean; role: any }> = {};
-    allPrograms.forEach((p) => {
-      updated[p.id] = {
-        enabled: enableAll,
-        role: selectedPrograms[p.id]?.role || defaultRole,
-      };
-    });
-    setSelectedPrograms(updated);
-  };
+  const pendingUsers = users.filter((u) => u.status === 'PENDING');
+  const approvedUsers = users.filter((u) => u.status === 'APPROVED');
+  const suspendedUsers = users.filter((u) => u.status === 'SUSPENDED');
+  const rejectedUsers = users.filter((u) => u.status === 'REJECTED');
 
   const filteredUsers = users.filter((u) => {
     const q = searchQuery.toLowerCase();
-    return (
+    const matchesQuery =
       u.name?.toLowerCase().includes(q) ||
       u.email?.toLowerCase().includes(q) ||
       u.systemRole?.toLowerCase().includes(q) ||
-      u.programs?.some((p: any) => p.name?.toLowerCase().includes(q))
-    );
+      u.programs?.some((p: any) => p.name?.toLowerCase().includes(q));
+
+    if (!matchesQuery) return false;
+    if (statusFilter === 'ALL') return true;
+    return u.status === statusFilter;
   });
 
   return (
@@ -268,26 +369,103 @@ export default function AdminUsersPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-6">
         <div>
           <h1 className="text-xl font-bold font-mono text-slate-100 flex items-center gap-2">
-            <Users className="w-5 h-5 text-purple-400" /> System Users & Program Assignments
+            <Users className="w-5 h-5 text-purple-400" /> Operator Governance & Approval Queue
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            Provision accounts, assign security program scopes to operators, and enforce global RBAC privileges
+            Review pending registration requests, assign program perimeters, and enforce cryptographic session controls
           </p>
         </div>
 
-        <Button
-          onClick={() => {
-            setIsModalOpen(true);
-            setFormError(null);
-          }}
-          variant="primary"
-          className="font-mono text-xs gap-2 shadow-lg shadow-purple-950/40 bg-purple-600 hover:bg-purple-500 border-purple-500 text-white"
-        >
-          <UserPlus className="w-4 h-4" /> Provision New User
-        </Button>
+        <div className="flex items-center gap-2.5">
+          <Button
+            onClick={() => {
+              setIsCreateModalOpen(true);
+              setFormError(null);
+            }}
+            variant="primary"
+            className="font-mono text-xs gap-2 shadow-lg shadow-purple-950/40 bg-purple-600 hover:bg-purple-500 border-purple-500 text-white"
+          >
+            <UserPlus className="w-4 h-4" /> Provision Operator
+          </Button>
+        </div>
       </div>
 
-      {/* Feedback Toast/Alert */}
+      {/* Metrics Bar */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div
+          onClick={() => {
+            setActiveTab('pending');
+            setStatusFilter('ALL');
+          }}
+          className={`p-3.5 rounded-lg border cursor-pointer transition-all ${
+            activeTab === 'pending'
+              ? 'bg-amber-950/40 border-amber-500/50 shadow-sm'
+              : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
+          }`}
+        >
+          <div className="text-[11px] font-mono text-slate-400 flex items-center justify-between">
+            <span>PENDING APPROVALS</span>
+            <Clock className="w-3.5 h-3.5 text-amber-400" />
+          </div>
+          <div className="text-xl font-bold font-mono text-amber-400 mt-1">{pendingUsers.length}</div>
+        </div>
+
+        <div
+          onClick={() => {
+            setActiveTab('all');
+            setStatusFilter('APPROVED');
+          }}
+          className={`p-3.5 rounded-lg border cursor-pointer transition-all ${
+            activeTab === 'all' && statusFilter === 'APPROVED'
+              ? 'bg-emerald-950/40 border-emerald-500/50 shadow-sm'
+              : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
+          }`}
+        >
+          <div className="text-[11px] font-mono text-slate-400 flex items-center justify-between">
+            <span>ACTIVE OPERATORS</span>
+            <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+          </div>
+          <div className="text-xl font-bold font-mono text-emerald-400 mt-1">{approvedUsers.length}</div>
+        </div>
+
+        <div
+          onClick={() => {
+            setActiveTab('all');
+            setStatusFilter('SUSPENDED');
+          }}
+          className={`p-3.5 rounded-lg border cursor-pointer transition-all ${
+            activeTab === 'all' && statusFilter === 'SUSPENDED'
+              ? 'bg-rose-950/40 border-rose-500/50 shadow-sm'
+              : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
+          }`}
+        >
+          <div className="text-[11px] font-mono text-slate-400 flex items-center justify-between">
+            <span>SUSPENDED</span>
+            <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />
+          </div>
+          <div className="text-xl font-bold font-mono text-rose-400 mt-1">{suspendedUsers.length}</div>
+        </div>
+
+        <div
+          onClick={() => {
+            setActiveTab('all');
+            setStatusFilter('ALL');
+          }}
+          className={`p-3.5 rounded-lg border cursor-pointer transition-all ${
+            activeTab === 'all' && statusFilter === 'ALL'
+              ? 'bg-purple-950/40 border-purple-500/50 shadow-sm'
+              : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
+          }`}
+        >
+          <div className="text-[11px] font-mono text-slate-400 flex items-center justify-between">
+            <span>TOTAL ACCOUNTS</span>
+            <Users className="w-3.5 h-3.5 text-purple-400" />
+          </div>
+          <div className="text-xl font-bold font-mono text-slate-100 mt-1">{users.length}</div>
+        </div>
+      </div>
+
+      {/* Success Notification */}
       {successMessage && (
         <div className="p-3.5 rounded-lg bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 text-xs font-mono flex items-center justify-between">
           <div className="flex items-center gap-2.5">
@@ -303,29 +481,239 @@ export default function AdminUsersPage() {
         </div>
       )}
 
-      {/* Program Assignment Modal */}
-      {assignUser && (
+      {/* Approval Modal */}
+      {approveUser && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
           <Card className="w-full max-w-2xl border-slate-800 bg-slate-900 shadow-2xl animate-in fade-in zoom-in-95 duration-150 max-h-[90vh] flex flex-col">
             <CardHeader className="border-b border-slate-800/80 pb-4 shrink-0">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
                   <div className="p-2 rounded-lg bg-emerald-950/60 border border-emerald-500/30 text-emerald-400">
+                    <UserCheck className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <CardTitle className="text-base font-mono text-slate-100">
+                      Approve Operator Registration
+                    </CardTitle>
+                    <CardDescription className="text-xs font-mono text-slate-400">
+                      Grant clearance for <strong className="text-purple-300">{approveUser.name}</strong> ({approveUser.email})
+                    </CardDescription>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setApproveUser(null)}
+                  className="text-slate-400 hover:text-slate-200 p-1.5 rounded hover:bg-slate-800"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </CardHeader>
+
+            <CardContent className="pt-4 flex-1 overflow-y-auto space-y-4 font-mono">
+              {approvalError && (
+                <div className="p-3 rounded-lg bg-rose-950/50 border border-rose-500/40 text-rose-300 text-xs flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                  <span>{approvalError}</span>
+                </div>
+              )}
+
+              {/* Step 1: Assign Final Role */}
+              <div className="space-y-2">
+                <label className="block text-xs font-semibold text-slate-200">
+                  1. SELECT AUTHORIZED SYSTEM ROLE
+                </label>
+                <div className="text-[11px] text-slate-400 mb-1">
+                  Requested Role by Candidate:{' '}
+                  <strong className="text-purple-300">{approveUser.requestedRole || 'ANALYST'}</strong>
+                </div>
+                <select
+                  value={selectedRoleForApproval}
+                  onChange={(e) => setSelectedRoleForApproval(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 text-xs text-slate-100 rounded px-3 py-2 focus:outline-none focus:border-purple-500"
+                >
+                  <option value="ANALYST">ANALYST — Active reconnaissance & finding triage</option>
+                  <option value="ADMIN">ADMIN — Full platform control & governance</option>
+                  <option value="VIEWER">VIEWER — Read-only intelligence & topology</option>
+                  <option value="AUDITOR">AUDITOR — Compliance review & audit ledger</option>
+                </select>
+              </div>
+
+              {/* Step 2: Assign Initial Programs */}
+              <div className="space-y-2 pt-2 border-t border-slate-800">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-semibold text-slate-200">
+                    2. ASSIGN INITIAL PROGRAM SCOPES
+                  </label>
+                  <span className="text-[11px] text-emerald-400">
+                    {Object.values(approvalPrograms).filter((v) => v.enabled).length} of {allPrograms.length} Selected
+                  </span>
+                </div>
+
+                <div className="space-y-2.5 max-h-60 overflow-y-auto pr-1">
+                  {allPrograms.map((prog) => {
+                    const state = approvalPrograms[prog.id] || { enabled: false, role: 'ANALYST' };
+                    return (
+                      <div
+                        key={prog.id}
+                        className={`p-3 rounded-lg border transition-all ${
+                          state.enabled
+                            ? 'bg-slate-950 border-emerald-500/40'
+                            : 'bg-slate-950/40 border-slate-800/60 opacity-60'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <label className="flex items-center gap-2.5 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={state.enabled}
+                              onChange={(e) =>
+                                setApprovalPrograms((prev) => ({
+                                  ...prev,
+                                  [prog.id]: {
+                                    enabled: e.target.checked,
+                                    role: prev[prog.id]?.role || 'ANALYST',
+                                  },
+                                }))
+                              }
+                              className="rounded bg-slate-900 border-slate-700 text-purple-600 focus:ring-purple-500"
+                            />
+                            <div>
+                              <div className="text-xs font-semibold text-slate-200">{prog.name}</div>
+                              <div className="text-[10px] text-slate-500">{prog.slug}</div>
+                            </div>
+                          </label>
+
+                          {state.enabled && (
+                            <select
+                              value={state.role}
+                              onChange={(e) =>
+                                setApprovalPrograms((prev) => ({
+                                  ...prev,
+                                  [prog.id]: {
+                                    ...prev[prog.id],
+                                    role: e.target.value as any,
+                                  },
+                                }))
+                              }
+                              className="bg-slate-900 border border-slate-700 text-[11px] text-slate-200 rounded px-2 py-1"
+                            >
+                              <option value="LEAD_ANALYST">LEAD ANALYST</option>
+                              <option value="ANALYST">ANALYST</option>
+                              <option value="VIEWER">VIEWER</option>
+                              <option value="AUDITOR">AUDITOR</option>
+                            </select>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </CardContent>
+
+            <div className="p-4 border-t border-slate-800 bg-slate-950/60 flex items-center justify-end gap-3 shrink-0">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setApproveUser(null)}
+                className="font-mono text-xs text-slate-400"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
+                size="sm"
+                loading={approving}
+                onClick={handleConfirmApproval}
+                className="font-mono text-xs bg-emerald-600 hover:bg-emerald-500 border-emerald-500 text-white gap-1.5"
+              >
+                <Check className="w-3.5 h-3.5" /> Approve & Grant Clearance
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* Rejection Modal */}
+      {rejectUser && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <Card className="w-full max-w-md border-slate-800 bg-slate-900 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+            <CardHeader className="border-b border-slate-800/80 pb-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base font-mono text-rose-300 flex items-center gap-2">
+                  <UserX className="w-5 h-5 text-rose-400" /> Reject Registration Request
+                </CardTitle>
+                <button
+                  onClick={() => setRejectUser(null)}
+                  className="text-slate-400 hover:text-slate-200"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <CardDescription className="text-xs font-mono text-slate-400">
+                Reject candidate {rejectUser.email}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="pt-4 space-y-3 font-mono">
+              <div className="space-y-1.5">
+                <label className="text-xs text-slate-300">REJECTION REASON (OPTIONAL)</label>
+                <textarea
+                  value={rejectionReason}
+                  onChange={(e) => setRejectionReason(e.target.value)}
+                  placeholder="e.g. Unverified organizational domain / Unauthorized application"
+                  rows={3}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-md text-xs text-slate-200 p-2.5 focus:outline-none focus:border-rose-500"
+                />
+              </div>
+            </CardContent>
+            <div className="p-3 border-t border-slate-800 bg-slate-950/60 flex items-center justify-end gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setRejectUser(null)}
+                className="text-xs font-mono text-slate-400"
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                loading={rejecting}
+                onClick={handleConfirmRejection}
+                className="text-xs font-mono bg-rose-600 hover:bg-rose-500 text-white"
+              >
+                Confirm Rejection
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* Program Assignment Modal (for existing users) */}
+      {assignUser && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <Card className="w-full max-w-2xl border-slate-800 bg-slate-900 shadow-2xl animate-in fade-in zoom-in-95 duration-150 max-h-[90vh] flex flex-col">
+            <CardHeader className="border-b border-slate-800/80 pb-4 shrink-0">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 rounded-lg bg-purple-950/60 border border-purple-500/30 text-purple-400">
                     <FolderCheck className="w-5 h-5" />
                   </div>
                   <div>
                     <CardTitle className="text-base font-mono text-slate-100 flex items-center gap-2">
-                      <span>Assign Programs:</span>
+                      <span>Assign Scopes:</span>
                       <span className="text-purple-300 font-semibold">{assignUser.name}</span>
                     </CardTitle>
                     <CardDescription className="text-xs font-mono text-slate-400">
-                      {assignUser.email} • System Role: <span className="text-slate-200 font-bold">{assignUser.systemRole}</span>
+                      {assignUser.email} • Role: <span className="text-slate-200 font-bold">{assignUser.systemRole}</span>
                     </CardDescription>
                   </div>
                 </div>
                 <button
                   onClick={() => setAssignUser(null)}
-                  className="text-slate-400 hover:text-slate-200 p-1.5 rounded hover:bg-slate-800 transition-colors"
+                  className="text-slate-400 hover:text-slate-200 p-1.5 rounded hover:bg-slate-800"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -340,34 +728,6 @@ export default function AdminUsersPage() {
                 </div>
               )}
 
-              {/* Bulk Action Buttons */}
-              <div className="flex items-center justify-between bg-slate-950/60 p-2.5 rounded-lg border border-slate-800/80 text-xs font-mono">
-                <span className="text-slate-400">
-                  Assigned Scopes:{' '}
-                  <strong className="text-emerald-400">
-                    {Object.values(selectedPrograms).filter((v) => v.enabled).length} of {allPrograms.length}
-                  </strong>
-                </span>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => toggleSelectAll(true, 'ANALYST')}
-                    className="text-purple-400 hover:text-purple-300 hover:underline px-2 py-0.5"
-                  >
-                    Select All
-                  </button>
-                  <span className="text-slate-700">|</span>
-                  <button
-                    type="button"
-                    onClick={() => toggleSelectAll(false)}
-                    className="text-rose-400 hover:text-rose-300 hover:underline px-2 py-0.5"
-                  >
-                    Clear All
-                  </button>
-                </div>
-              </div>
-
-              {/* Programs List */}
               <div className="space-y-3">
                 {allPrograms.map((program) => {
                   const state = selectedPrograms[program.id] || { enabled: false, role: 'ANALYST' };
@@ -376,7 +736,7 @@ export default function AdminUsersPage() {
                       key={program.id}
                       className={`p-3.5 rounded-lg border transition-all ${
                         state.enabled
-                          ? 'bg-slate-950/90 border-emerald-500/40 shadow-sm'
+                          ? 'bg-slate-950/90 border-purple-500/40 shadow-sm'
                           : 'bg-slate-950/40 border-slate-800/60 opacity-70 hover:opacity-100'
                       }`}
                     >
@@ -421,12 +781,12 @@ export default function AdminUsersPage() {
                                   },
                                 }))
                               }
-                              className="bg-slate-900 border border-slate-700 text-xs text-slate-200 rounded px-2.5 py-1 focus:outline-none focus:border-purple-500 font-mono"
+                              className="bg-slate-900 border border-slate-700 text-xs text-slate-200 rounded px-2.5 py-1 font-mono"
                             >
-                              <option value="LEAD_ANALYST">LEAD ANALYST (Manage Scopes & Tasks)</option>
-                              <option value="ANALYST">ANALYST (Execute Recon & Findings)</option>
-                              <option value="VIEWER">VIEWER (Read-Only Intel & Graphs)</option>
-                              <option value="AUDITOR">AUDITOR (Compliance & Audit Review)</option>
+                              <option value="LEAD_ANALYST">LEAD ANALYST</option>
+                              <option value="ANALYST">ANALYST</option>
+                              <option value="VIEWER">VIEWER</option>
+                              <option value="AUDITOR">AUDITOR</option>
                             </select>
                           </div>
                         )}
@@ -443,7 +803,7 @@ export default function AdminUsersPage() {
                 variant="ghost"
                 size="sm"
                 onClick={() => setAssignUser(null)}
-                className="font-mono text-xs text-slate-400 hover:text-slate-200"
+                className="font-mono text-xs text-slate-400"
               >
                 Cancel
               </Button>
@@ -453,7 +813,7 @@ export default function AdminUsersPage() {
                 size="sm"
                 loading={savingAssignments}
                 onClick={handleSaveAssignments}
-                className="font-mono text-xs bg-emerald-600 hover:bg-emerald-500 border-emerald-500 text-white gap-1.5"
+                className="font-mono text-xs bg-purple-600 hover:bg-purple-500 border-purple-500 text-white gap-1.5"
               >
                 <Check className="w-3.5 h-3.5" /> Save Program Assignments
               </Button>
@@ -462,8 +822,8 @@ export default function AdminUsersPage() {
         </div>
       )}
 
-      {/* User Creation Modal / Overlay */}
-      {isModalOpen && (
+      {/* User Creation Modal */}
+      {isCreateModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
           <Card className="w-full max-w-lg border-slate-800 bg-slate-900 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
             <CardHeader className="border-b border-slate-800/80 pb-4">
@@ -475,13 +835,13 @@ export default function AdminUsersPage() {
                   <div>
                     <CardTitle className="text-base font-mono text-slate-100">Provision Operator Account</CardTitle>
                     <CardDescription className="text-xs font-mono text-slate-400">
-                      Set login ID, credentials, and global system authorization level
+                      Provision pre-approved credentials directly into persistent database
                     </CardDescription>
                   </div>
                 </div>
                 <button
-                  onClick={() => setIsModalOpen(false)}
-                  className="text-slate-400 hover:text-slate-200 p-1.5 rounded hover:bg-slate-800 transition-colors"
+                  onClick={() => setIsCreateModalOpen(false)}
+                  className="text-slate-400 hover:text-slate-200"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -549,9 +909,6 @@ export default function AdminUsersPage() {
                       {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
-                  <p className="text-[11px] font-mono text-slate-500">
-                    The operator will use this passphrase to authenticate on the login gateway.
-                  </p>
                 </div>
 
                 <div className="space-y-1.5">
@@ -573,7 +930,7 @@ export default function AdminUsersPage() {
                     type="button"
                     variant="ghost"
                     size="sm"
-                    onClick={() => setIsModalOpen(false)}
+                    onClick={() => setIsCreateModalOpen(false)}
                     className="font-mono text-xs text-slate-400 hover:text-slate-200"
                   >
                     Cancel
@@ -594,27 +951,71 @@ export default function AdminUsersPage() {
         </div>
       )}
 
-      {/* Search & Filter Bar */}
+      {/* Tabs / Filter Controls */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-900/60 p-3 rounded-lg border border-slate-800">
-        <div className="relative w-full sm:w-80">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-          <input
-            type="text"
-            placeholder="Search by name, login email, role, or program..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-slate-950 border border-slate-700/80 rounded-md text-xs text-slate-100 placeholder:text-slate-500 pl-9 pr-3 py-2 focus:outline-none focus:border-purple-500 font-mono"
-          />
+        <div className="flex items-center gap-2 w-full sm:w-auto">
+          <button
+            onClick={() => setActiveTab('pending')}
+            className={`px-3 py-1.5 rounded-md text-xs font-mono font-semibold transition-colors flex items-center gap-2 ${
+              activeTab === 'pending'
+                ? 'bg-amber-950/80 text-amber-300 border border-amber-500/40 shadow-sm'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+            }`}
+          >
+            <Clock className="w-3.5 h-3.5" />
+            <span>Pending Approvals</span>
+            {pendingUsers.length > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-slate-950 font-bold text-[10px]">
+                {pendingUsers.length}
+              </span>
+            )}
+          </button>
+
+          <button
+            onClick={() => setActiveTab('all')}
+            className={`px-3 py-1.5 rounded-md text-xs font-mono font-semibold transition-colors flex items-center gap-2 ${
+              activeTab === 'all'
+                ? 'bg-purple-950/80 text-purple-300 border border-purple-500/40 shadow-sm'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+            }`}
+          >
+            <Users className="w-3.5 h-3.5" />
+            <span>All Provisioned Operators</span>
+            <span className="text-slate-500 text-[10px]">({users.length})</span>
+          </button>
         </div>
-        <div className="flex items-center gap-2 text-xs font-mono text-slate-400 w-full sm:w-auto justify-between sm:justify-end">
-          <span>
-            Total Accounts: <strong className="text-slate-200">{users.length}</strong>
-          </span>
+
+        <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
+          <div className="relative w-full sm:w-64">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+            <input
+              type="text"
+              placeholder="Search by name, email, role..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-700/80 rounded-md text-xs text-slate-100 placeholder:text-slate-500 pl-8 pr-3 py-1.5 focus:outline-none focus:border-purple-500 font-mono"
+            />
+          </div>
+
+          {activeTab === 'all' && (
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="bg-slate-950 border border-slate-700 text-xs text-slate-200 rounded px-2.5 py-1.5 font-mono"
+            >
+              <option value="ALL">All Statuses</option>
+              <option value="APPROVED">APPROVED</option>
+              <option value="PENDING">PENDING</option>
+              <option value="SUSPENDED">SUSPENDED</option>
+              <option value="REJECTED">REJECTED</option>
+            </select>
+          )}
+
           <Button
             variant="ghost"
             size="sm"
             onClick={fetchUsers}
-            className="text-xs font-mono text-slate-400 hover:text-slate-200 p-1.5 h-auto"
+            className="text-xs font-mono text-slate-400 hover:text-slate-200 p-1.5 h-auto shrink-0"
             title="Refresh list"
           >
             <RefreshCw className="w-3.5 h-3.5" />
@@ -622,120 +1023,232 @@ export default function AdminUsersPage() {
         </div>
       </div>
 
-      {/* Users Table */}
-      <Card className="border-slate-800">
-        <CardContent className="p-0">
-          {loading ? (
-            <div className="text-center py-12 text-slate-500 font-mono text-xs flex items-center justify-center gap-2">
-              <RefreshCw className="w-4 h-4 animate-spin text-purple-400" /> Loading provisioned operators & assignments...
-            </div>
-          ) : filteredUsers.length === 0 ? (
-            <div className="text-center py-12 text-slate-500 font-mono text-xs">
-              No matching operator accounts found.
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-950/80 border-b border-slate-800 font-mono text-slate-400 uppercase text-[10px]">
-                  <tr>
-                    <th className="py-3 px-4">Operator & Login ID</th>
-                    <th className="py-3 px-4">Global Role</th>
-                    <th className="py-3 px-4">Status</th>
-                    <th className="py-3 px-4">Program Assignments</th>
-                    <th className="py-3 px-4">Created At</th>
-                    <th className="py-3 px-4 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800/80 font-mono">
-                  {filteredUsers.map((u) => (
-                    <tr key={u.id} className="hover:bg-slate-800/30 transition-colors">
-                      <td className="py-3 px-4">
-                        <div className="font-semibold text-slate-200 flex items-center gap-2">
-                          <span>{u.name}</span>
-                          {u.systemRole === 'ADMIN' && (
-                            <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-purple-950/80 border border-purple-500/40 text-purple-300">
-                              ADMIN
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-purple-300/80 text-[11px] select-all">{u.email}</div>
-                      </td>
-                      <td className="py-3 px-4">
-                        <select
-                          value={u.systemRole}
-                          onChange={(e) => handleUpdateRole(u.id, e.target.value)}
-                          disabled={updatingId === u.id}
-                          className="bg-slate-950 border border-slate-700 text-xs text-slate-200 rounded px-2 py-1 focus:outline-none focus:border-purple-500 font-mono"
-                        >
-                          <option value="ADMIN">ADMIN</option>
-                          <option value="ANALYST">ANALYST</option>
-                          <option value="VIEWER">VIEWER</option>
-                          <option value="AUDITOR">AUDITOR</option>
-                        </select>
-                      </td>
-                      <td className="py-3 px-4">
-                        {u.lockedUntil && new Date(u.lockedUntil) > new Date() ? (
-                          <Badge variant="danger" size="sm">
-                            LOCKED OUT
-                          </Badge>
-                        ) : u.isActive ? (
-                          <Badge variant="success" size="sm">
-                            ACTIVE
-                          </Badge>
-                        ) : (
-                          <Badge variant="outline" size="sm">
-                            SUSPENDED
-                          </Badge>
-                        )}
-                      </td>
-                      <td className="py-3 px-4">
-                        <div className="flex flex-wrap items-center gap-1.5 max-w-xs">
-                          {u.programs && u.programs.length > 0 ? (
-                            u.programs.map((p: any) => (
-                              <span
-                                key={p.id}
-                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-[10px] text-slate-300"
-                                title={`${p.name} (Role: ${p.role})`}
-                              >
-                                <span className="font-medium truncate max-w-[100px]">{p.name}</span>
-                                <span className="text-emerald-400 font-bold text-[9px]">({p.role.split('_')[0]})</span>
-                              </span>
-                            ))
-                          ) : (
-                            <span className="text-slate-500 text-[11px] italic">No programs assigned</span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="py-3 px-4 text-slate-400 text-[11px]">{formatDate(u.createdAt)}</td>
-                      <td className="py-3 px-4 text-right space-x-2">
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => openProgramAssignmentModal(u)}
-                          className="text-[10px] font-mono py-1 px-2.5 bg-slate-800 hover:bg-slate-700 text-purple-300 border-purple-500/30"
-                        >
-                          <FolderCheck className="w-3.5 h-3.5 mr-1 text-purple-400" /> Assign Programs
-                        </Button>
-                        <Button
-                          variant={u.isActive ? 'outline' : 'primary'}
-                          size="sm"
-                          onClick={() => handleToggleActive(u.id, u.isActive, u.systemRole)}
-                          disabled={updatingId === u.id}
-                          className="text-[10px] font-mono py-1 px-2.5"
-                        >
-                          {u.isActive ? 'Suspend' : 'Activate'}
-                        </Button>
-                      </td>
+      {/* Main Table / View */}
+      {activeTab === 'pending' ? (
+        <Card className="border-slate-800">
+          <CardHeader className="py-3 px-4 border-b border-slate-800/80 flex flex-row items-center justify-between">
+            <CardTitle className="text-xs font-mono text-amber-300 flex items-center gap-2">
+              <Clock className="w-4 h-4 text-amber-400" /> Pending Registration Queue ({pendingUsers.length})
+            </CardTitle>
+            <span className="text-[11px] font-mono text-slate-400">
+              Real-time approval updates propagate immediately to candidate
+            </span>
+          </CardHeader>
+          <CardContent className="p-0">
+            {loading ? (
+              <div className="text-center py-12 text-slate-500 font-mono text-xs flex items-center justify-center gap-2">
+                <RefreshCw className="w-4 h-4 animate-spin text-purple-400" /> Checking for pending registration requests...
+              </div>
+            ) : pendingUsers.length === 0 ? (
+              <div className="text-center py-12 text-slate-400 font-mono text-xs space-y-1">
+                <CheckCircle2 className="w-6 h-6 text-emerald-400 mx-auto mb-2 opacity-80" />
+                <p className="font-semibold text-slate-200">No Pending Registration Requests</p>
+                <p className="text-[11px] text-slate-500">All registered candidates have been reviewed and processed.</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs font-mono">
+                  <thead className="bg-slate-950/80 border-b border-slate-800 text-slate-400 uppercase text-[10px]">
+                    <tr>
+                      <th className="py-3 px-4">Candidate & Login ID</th>
+                      <th className="py-3 px-4">Requested Role</th>
+                      <th className="py-3 px-4">Ethical Use Acceptance</th>
+                      <th className="py-3 px-4">Email Verification</th>
+                      <th className="py-3 px-4">Registered At</th>
+                      <th className="py-3 px-4 text-right">Actions</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/80">
+                    {pendingUsers.map((u) => (
+                      <tr key={u.id} className="hover:bg-slate-800/30 transition-colors">
+                        <td className="py-3.5 px-4">
+                          <div className="font-semibold text-slate-200">{u.name}</div>
+                          <div className="text-purple-300 text-[11px] select-all">{u.email}</div>
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <span className="px-2 py-0.5 rounded bg-purple-950/80 border border-purple-500/40 text-purple-300 text-[10px] font-bold">
+                            {u.requestedRole || 'ANALYST'}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4">
+                          {u.ethicalUseAccepted ? (
+                            <span className="text-emerald-400 flex items-center gap-1 text-[11px]">
+                              <Check className="w-3.5 h-3.5" /> Confirmed
+                            </span>
+                          ) : (
+                            <span className="text-amber-400 text-[11px]">Pending</span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-4">
+                          {u.emailVerified ? (
+                            <Badge variant="success" size="sm">
+                              VERIFIED
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" size="sm">
+                              UNVERIFIED
+                            </Badge>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-4 text-slate-400 text-[11px]">{formatDate(u.createdAt)}</td>
+                        <td className="py-3.5 px-4 text-right space-x-2">
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            onClick={() => handleOpenApprovalModal(u)}
+                            className="text-[10px] font-mono py-1 px-3 bg-emerald-600 hover:bg-emerald-500 border-emerald-500 text-white gap-1"
+                          >
+                            <Check className="w-3 h-3" /> Approve Clearance
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setRejectUser(u)}
+                            className="text-[10px] font-mono py-1 px-2.5 text-rose-400 hover:text-rose-200 border-rose-500/40"
+                          >
+                            <UserX className="w-3 h-3 mr-1" /> Reject
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      ) : (
+        <Card className="border-slate-800">
+          <CardContent className="p-0">
+            {loading ? (
+              <div className="text-center py-12 text-slate-500 font-mono text-xs flex items-center justify-center gap-2">
+                <RefreshCw className="w-4 h-4 animate-spin text-purple-400" /> Loading provisioned operators & assignments...
+              </div>
+            ) : filteredUsers.length === 0 ? (
+              <div className="text-center py-12 text-slate-500 font-mono text-xs">
+                No matching operator accounts found.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs font-mono">
+                  <thead className="bg-slate-950/80 border-b border-slate-800 text-slate-400 uppercase text-[10px]">
+                    <tr>
+                      <th className="py-3 px-4">Operator & Login ID</th>
+                      <th className="py-3 px-4">System Role</th>
+                      <th className="py-3 px-4">Status</th>
+                      <th className="py-3 px-4">Assigned Programs</th>
+                      <th className="py-3 px-4">Created At</th>
+                      <th className="py-3 px-4 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/80">
+                    {filteredUsers.map((u) => (
+                      <tr key={u.id} className="hover:bg-slate-800/30 transition-colors">
+                        <td className="py-3 px-4">
+                          <div className="font-semibold text-slate-200 flex items-center gap-2">
+                            <span>{u.name}</span>
+                            {u.systemRole === 'ADMIN' && (
+                              <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-purple-950/80 border border-purple-500/40 text-purple-300">
+                                ADMIN
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-purple-300/80 text-[11px] select-all">{u.email}</div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <select
+                            value={u.systemRole}
+                            onChange={(e) => handleUpdateRole(u.id, e.target.value)}
+                            disabled={updatingId === u.id || u.status === 'PENDING'}
+                            className="bg-slate-950 border border-slate-700 text-xs text-slate-200 rounded px-2 py-1 focus:outline-none focus:border-purple-500 font-mono"
+                          >
+                            <option value="ADMIN">ADMIN</option>
+                            <option value="ANALYST">ANALYST</option>
+                            <option value="VIEWER">VIEWER</option>
+                            <option value="AUDITOR">AUDITOR</option>
+                          </select>
+                        </td>
+                        <td className="py-3 px-4">
+                          {u.status === 'PENDING' ? (
+                            <Badge variant="warning" size="sm">
+                              PENDING REVIEW
+                            </Badge>
+                          ) : u.status === 'SUSPENDED' || !u.isActive ? (
+                            <Badge variant="danger" size="sm">
+                              SUSPENDED
+                            </Badge>
+                          ) : u.status === 'REJECTED' ? (
+                            <Badge variant="danger" size="sm">
+                              REJECTED
+                            </Badge>
+                          ) : (
+                            <Badge variant="success" size="sm">
+                              ACTIVE (APPROVED)
+                            </Badge>
+                          )}
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="flex flex-wrap items-center gap-1.5 max-w-xs">
+                            {u.programs && u.programs.length > 0 ? (
+                              u.programs.map((p: any) => (
+                                <span
+                                  key={p.id}
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-[10px] text-slate-300"
+                                  title={`${p.name} (Role: ${p.role})`}
+                                >
+                                  <span className="font-medium truncate max-w-[100px]">{p.name}</span>
+                                  <span className="text-emerald-400 font-bold text-[9px]">({p.role.split('_')[0]})</span>
+                                </span>
+                              ))
+                            ) : (
+                              <span className="text-slate-500 text-[11px] italic">No programs assigned</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4 text-slate-400 text-[11px]">{formatDate(u.createdAt)}</td>
+                        <td className="py-3 px-4 text-right space-x-2">
+                          {u.status === 'PENDING' ? (
+                            <Button
+                              variant="primary"
+                              size="sm"
+                              onClick={() => handleOpenApprovalModal(u)}
+                              className="text-[10px] font-mono py-1 px-2.5 bg-emerald-600 hover:bg-emerald-500 text-white"
+                            >
+                              Review & Approve
+                            </Button>
+                          ) : (
+                            <>
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => openProgramAssignmentModal(u)}
+                                className="text-[10px] font-mono py-1 px-2.5 bg-slate-800 hover:bg-slate-700 text-purple-300 border-purple-500/30"
+                              >
+                                <FolderCheck className="w-3.5 h-3.5 mr-1 text-purple-400" /> Assign Programs
+                              </Button>
+                              <Button
+                                variant={u.status === 'SUSPENDED' ? 'primary' : 'outline'}
+                                size="sm"
+                                onClick={() => handleToggleSuspend(u.id, u.status)}
+                                disabled={updatingId === u.id}
+                                className={`text-[10px] font-mono py-1 px-2.5 ${
+                                  u.status === 'SUSPENDED' ? 'bg-emerald-600 text-white' : 'text-rose-300 border-rose-500/30'
+                                }`}
+                              >
+                                {u.status === 'SUSPENDED' ? 'Reactivate' : 'Suspend'}
+                              </Button>
+                            </>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
-
-

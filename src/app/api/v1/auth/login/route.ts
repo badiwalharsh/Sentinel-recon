@@ -55,7 +55,9 @@ export async function POST(req: Request) {
           email: dbUser.email,
           passwordHash: dbUser.passwordHash,
           systemRole: dbUser.systemRole,
+          status: dbUser.status || (dbUser.isActive ? 'APPROVED' : 'SUSPENDED'),
           isActive: dbUser.isActive,
+          rejectionReason: dbUser.rejectionReason,
           failedLoginCount: dbUser.failedLoginCount,
           lockedUntil: dbUser.lockedUntil?.toISOString() || null,
           tokenVersion: dbUser.tokenVersion || 1,
@@ -84,8 +86,49 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Invalid email or password' }, { status: 401 });
     }
 
-    if (!user.isActive) {
-      return NextResponse.json({ error: 'Account has been deactivated. Contact an administrator.' }, { status: 403 });
+    // Explicit account status enforcement
+    const userStatus = user.status || (user.isActive ? 'APPROVED' : 'SUSPENDED');
+
+    if (userStatus === 'PENDING') {
+      return NextResponse.json(
+        {
+          error: 'Your account registration is currently pending administrator approval. Please wait for an administrator to review and approve your request.',
+          status: 'PENDING',
+        },
+        { status: 403 }
+      );
+    }
+
+    if (userStatus === 'REJECTED') {
+      return NextResponse.json(
+        {
+          error: user.rejectionReason
+            ? `Your registration request was rejected: "${user.rejectionReason}"`
+            : 'Your registration request was rejected by an administrator.',
+          status: 'REJECTED',
+        },
+        { status: 403 }
+      );
+    }
+
+    if (userStatus === 'SUSPENDED' || !user.isActive) {
+      return NextResponse.json(
+        {
+          error: 'Your account has been suspended by a security administrator. Contact SecOps.',
+          status: 'SUSPENDED',
+        },
+        { status: 403 }
+      );
+    }
+
+    if (userStatus === 'DISABLED') {
+      return NextResponse.json(
+        {
+          error: 'Your account has been permanently disabled.',
+          status: 'DISABLED',
+        },
+        { status: 403 }
+      );
     }
 
     if (user.lockedUntil && new Date(user.lockedUntil) > new Date()) {

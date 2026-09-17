@@ -45,6 +45,7 @@ export async function getCurrentUser(): Promise<TokenPayload | null> {
 
       if (dbUser) {
         if (!dbUser.isActive) return null;
+        if (dbUser.status && dbUser.status !== 'APPROVED') return null;
         if (dbUser.lockedUntil && new Date(dbUser.lockedUntil) > new Date()) return null;
 
         const tokenVer = payload.tokenVersion ?? 1;
@@ -57,6 +58,7 @@ export async function getCurrentUser(): Promise<TokenPayload | null> {
           email: dbUser.email,
           name: dbUser.name,
           systemRole: dbUser.systemRole as TokenPayload['systemRole'],
+          status: dbUser.status,
           tokenVersion: dbUser.tokenVersion,
         };
       }
@@ -76,6 +78,7 @@ export async function getCurrentUser(): Promise<TokenPayload | null> {
 
     if (user) {
       if (!user.isActive) return null;
+      if (user.status && user.status !== 'APPROVED') return null;
       if (user.lockedUntil && new Date(user.lockedUntil) > new Date()) return null;
 
       // Session invalidation check
@@ -89,6 +92,7 @@ export async function getCurrentUser(): Promise<TokenPayload | null> {
         email: user.email,
         name: user.name,
         systemRole: user.systemRole as TokenPayload['systemRole'],
+        status: user.status,
         tokenVersion: user.tokenVersion,
       };
     }

@@ -37,7 +37,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const { name, email, password } = parsed.data;
+    const { name, email, password, requestedRole, ethicalAgreementConfirmed } = parsed.data;
     const normalizedEmail = email.trim().toLowerCase();
 
     // Check duplicate in Prisma & dbStore
@@ -62,7 +62,7 @@ export async function POST(req: Request) {
     const now = new Date();
     const newUserId = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
-    // Create user in Prisma if DB is accessible
+    // Create user in Prisma if DB is accessible with PENDING status
     let dbUserCreated = false;
     try {
       const created = await prisma.user.create({
@@ -72,8 +72,12 @@ export async function POST(req: Request) {
           email: normalizedEmail,
           passwordHash,
           systemRole: 'ANALYST',
-          isActive: true,
-          emailVerified: now,
+          requestedRole: requestedRole || 'ANALYST',
+          status: 'PENDING',
+          isActive: false, // Inactive until approved
+          ethicalUseAccepted: ethicalAgreementConfirmed ?? true,
+          emailVerified: null,
+          verificationToken,
           tokenVersion: 1,
         },
       });
@@ -88,9 +92,12 @@ export async function POST(req: Request) {
       email: normalizedEmail,
       passwordHash,
       systemRole: 'ANALYST',
-      isActive: true,
-      emailVerified: now.toISOString(),
-      verificationToken: null,
+      requestedRole: requestedRole || 'ANALYST',
+      status: 'PENDING',
+      isActive: false,
+      ethicalUseAccepted: ethicalAgreementConfirmed ?? true,
+      emailVerified: null,
+      verificationToken,
       twoFactorEnabled: false,
       failedLoginCount: 0,
       lockedUntil: null,
@@ -99,49 +106,62 @@ export async function POST(req: Request) {
     };
 
     dbStore.users.unshift(newUser);
-
-    // Auto-enroll user into initial active programs
-    for (const prog of dbStore.programs) {
-      if (!prog.memberships.some((m) => m.userId === newUser.id)) {
-        prog.memberships.push({
-          id: `m_${newUser.id}_${prog.id}`,
-          userId: newUser.id,
-          role: 'ANALYST',
-        });
-        if (dbUserCreated) {
-          try {
-            await prisma.programMembership.create({
-              data: {
-                programId: prog.id,
-                userId: newUser.id,
-                role: 'ANALYST',
-              },
-            }).catch(() => {});
-          } catch {}
-        }
-      }
-    }
-
-    // Persist memory store
     dbStore.persist();
+
+    // Send verification email asynchronously if service configured
+    try {
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+      const verifyLink = `${appUrl}/verify-email?token=${verificationToken}&email=${encodeURIComponent(normalizedEmail)}`;
+      const html = generateEmailVerificationHtml(newUser.name, verifyLink);
+      await sendEmail({
+        to: normalizedEmail,
+        subject: 'Verify your Sentinel Recon account',
+        html,
+      }).catch(() => {});
+    } catch {}
 
     await createAuditLog({
       action: 'USER_REGISTER',
       entityType: 'User',
       entityId: newUser.id,
       userId: newUser.id,
-      details: { email: newUser.email, defaultRole: 'ANALYST', verificationRequired: false },
+      details: {
+        email: newUser.email,
+        requestedRole: newUser.requestedRole,
+        status: 'PENDING',
+        ethicalAgreementConfirmed: true,
+      },
       req,
+    });
+
+    // Import realtime broker and emit event
+    const { publishRealtimeEvent } = await import('@/lib/realtime/broker');
+    await publishRealtimeEvent({
+      eventType: 'USER_REGISTERED',
+      entityType: 'User',
+      entityId: newUser.id,
+      targetUserId: newUser.id,
+      channels: ['admin:users', `user:${newUser.id}`],
+      payload: {
+        id: newUser.id,
+        name: newUser.name,
+        email: newUser.email,
+        requestedRole: newUser.requestedRole,
+        status: 'PENDING',
+        createdAt: newUser.createdAt,
+      },
     });
 
     return NextResponse.json({
       success: true,
-      message: 'Operator account registered successfully.',
+      status: 'PENDING',
+      message: 'Registration submitted successfully. Your account is pending administrator approval before access is granted.',
       user: {
         id: newUser.id,
         name: newUser.name,
         email: newUser.email,
-        systemRole: newUser.systemRole,
+        requestedRole: newUser.requestedRole,
+        status: newUser.status,
       },
     });
   } catch (err: any) {
